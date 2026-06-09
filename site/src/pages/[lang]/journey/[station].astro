@@ -1,0 +1,23 @@
+---
+import { getCollection, render } from 'astro:content';
+import TutorialLayout from '../../../layouts/TutorialLayout.astro';
+import { stationByNumber, type Lang } from '../../../data/journey.ts';
+
+// 只为 published 的 MDX(有正文的站)生成路由。
+export async function getStaticPaths() {
+  const entries = await getCollection('tutorials');
+  return entries.map((entry) => ({
+    params: { lang: entry.data.lang, station: String(entry.data.station) },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const lang = entry.data.lang as Lang;
+const meta = stationByNumber(entry.data.station);
+if (!meta) throw new Error(`journey.ts 缺少 station ${entry.data.station} 的卡片元数据`);
+const { Content } = await render(entry);
+---
+<TutorialLayout lang={lang} entry={entry} meta={meta}>
+  <Content />
+</TutorialLayout>

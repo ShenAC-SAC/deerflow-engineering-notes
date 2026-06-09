@@ -1,0 +1,98 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import BaseLayout from './BaseLayout.astro';
+import RiskMeter from '../components/RiskMeter.astro';
+import MentalModel from '../components/MentalModel.astro';
+import SourceRef from '../components/SourceRef.astro';
+import { JOURNEY, type Lang, type Station } from '../data/journey.ts';
+
+interface Props {
+  lang: Lang;
+  entry: CollectionEntry<'tutorials'>;
+  meta: Station;
+}
+const { lang, entry, meta } = Astro.props;
+const { title, sha, sourceRefs, station } = entry.data;
+
+const ordered = [...JOURNEY].sort((a, b) => a.station - b.station);
+const idx = ordered.findIndex((s) => s.station === station);
+const prev = ordered[idx - 1];
+const next = ordered[idx + 1];
+const linkable = (s?: Station) => !!s && s.status === 'published';
+
+const t = lang === 'zh'
+  ? { back: '← 旅程', refs: '源码锚点' }
+  : { back: '← Journey', refs: 'Source anchors' };
+---
+<BaseLayout title={`${meta.title[lang]} · DeerFlow`} lang={lang}>
+  <article class="tut wrap">
+    <a class="tut-back" href={`/${lang}/`}>{t.back}</a>
+
+    <header class="tut-head">
+      <div class="tut-badge">{String(station).padStart(2, '0')}</div>
+      <div class="tut-headmeta">
+        <h1 class="tut-title">{meta.title[lang]}</h1>
+        <div class="tut-meta">
+          <span class="tut-alt">{meta.altitude}</span>
+          <RiskMeter value={meta.risk} />
+        </div>
+      </div>
+    </header>
+
+    <MentalModel>{meta.mentalModel[lang]}</MentalModel>
+
+    <div class="tut-refs">
+      <span class="label">{t.refs} · @{sha.slice(0, 7)}</span>
+      <div class="tut-refs-list">
+        {sourceRefs.map((f) => <SourceRef file={f} sha={sha} />)}
+      </div>
+    </div>
+
+    <div class="prose"><slot /></div>
+
+    <nav class="tut-nav">
+      {linkable(prev)
+        ? <a href={`/${lang}/journey/${prev.station}`}>← {prev.title[lang]}</a>
+        : <span class="nav-off">{prev ? `🔒 ${prev.title[lang]}` : ''}</span>}
+      {linkable(next)
+        ? <a href={`/${lang}/journey/${next.station}`}>{next.title[lang]} →</a>
+        : <span class="nav-off">{next ? `${next.title[lang]} 🔒` : ''}</span>}
+    </nav>
+  </article>
+</BaseLayout>
+
+<style>
+  .tut { padding-top: 40px; padding-bottom: 24px; }
+  .tut-back { font-family: var(--mono); font-size: .85rem; color: var(--ink-dim); }
+
+  .tut-head { display: flex; align-items: center; gap: 16px; margin: 20px 0 4px; }
+  .tut-badge {
+    font-family: var(--mono); font-weight: 800; font-size: 1.5rem;
+    width: 60px; height: 60px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--accent-ink);
+    border-radius: 12px; box-shadow: var(--shadow-hard);
+  }
+  .tut-title { margin: 0; font-size: 2rem; }
+  .tut-meta { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+  .tut-alt {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .08em;
+    background: var(--bg-elev); color: var(--accent); padding: 2px 8px; border-radius: 5px;
+  }
+
+  .tut-refs {
+    margin: 18px 0 30px; padding: 12px 14px;
+    background: var(--bg-panel); border: 1px solid var(--bg-elev); border-radius: var(--radius);
+  }
+  .tut-refs-list { margin-top: 8px; }
+
+  .prose { font-size: 1.02rem; }
+  .prose :global(h2) { scroll-margin-top: 70px; }
+
+  .tut-nav {
+    display: flex; justify-content: space-between; gap: 12px;
+    margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--bg-elev);
+    font-family: var(--mono); font-size: .9rem;
+  }
+  .tut-nav .nav-off { color: var(--ink-faint); }
+</style>

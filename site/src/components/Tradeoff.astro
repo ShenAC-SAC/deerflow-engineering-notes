@@ -1,0 +1,28 @@
+---
+// 取舍两栏:左=这样做 / 右=代价(用具名 slot: left / right)
+interface Props { leftTitle?: string; rightTitle?: string; }
+const { leftTitle = '这样做', rightTitle = '代价' } = Astro.props;
+---
+<div class="tradeoff">
+  <div class="to-col to-left">
+    <h4>{leftTitle}</h4>
+    <slot name="left" />
+  </div>
+  <div class="to-col to-right">
+    <h4>{rightTitle}</h4>
+    <slot name="right" />
+  </div>
+</div>
+
+<style>
+  .tradeoff { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0; }
+  .to-col { padding: 14px 16px; border-radius: var(--radius); border: 1px solid var(--bg-elev); }
+  .to-left  { background: rgba(72,202,228,.06); border-left: 3px solid var(--accent); }
+  .to-right { background: rgba(239,71,111,.06); border-left: 3px solid var(--risk); }
+  .to-col h4 { margin: 0 0 6px; font-size: .92rem; }
+  .to-left h4  { color: var(--accent); }
+  .to-right h4 { color: var(--risk); }
+  .to-col :global(ul) { margin: 0; padding-left: 18px; }
+  .to-col :global(li) { font-size: .9rem; }
+  @media (max-width: 560px) { .tradeoff { grid-template-columns: 1fr; } }
+</style>

@@ -4,7 +4,12 @@ import { glob } from 'astro/loaders';
 // 深读正文集合(只放 published 的站)。地图卡片元数据在 src/data/journey.ts。
 // zod schema 是「校验牙齿」:frontmatter 不合规则构建直接失败。
 const tutorials = defineCollection({
-  loader: glob({ pattern: '**/*.mdx', base: './src/content/tutorials' }),
+  // generateId 必须包含语言目录,否则 zh/02 与 en/02 撞同名 id、互相覆盖。
+  loader: glob({
+    pattern: '**/*.mdx',
+    base: './src/content/tutorials',
+    generateId: ({ entry }) => entry.replace(/\.mdx$/, ''),
+  }),
   schema: z.object({
     lang: z.enum(['zh', 'en']),
     slug: z.string(),                       // 与 journey.ts 的 slug 对应

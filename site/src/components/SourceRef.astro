@@ -1,0 +1,30 @@
+---
+// 钉死的源码指针:链到 GitHub 对应 SHA 的 blob。锚定不变量,防教程漂移。
+interface Props {
+  file: string;
+  sha: string;
+  symbol?: string;
+  repo?: string;
+}
+const { file, sha, symbol, repo = 'bytedance/deer-flow' } = Astro.props;
+const url = `https://github.com/${repo}/blob/${sha}/${file}`;
+---
+<a class="source-ref" href={url} target="_blank" rel="noopener noreferrer">
+  <span class="sr-ico" aria-hidden="true">⌖</span>
+  <code class="sr-file">{file}{symbol ? `::${symbol}` : ''}</code>
+  <span class="sr-sha">@{sha.slice(0, 7)}</span>
+</a>
+
+<style>
+  .source-ref {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: .78rem;
+    background: var(--bg-elev); border: 1px solid #21456a;
+    border-radius: 6px; padding: 3px 9px; margin: 3px 6px 3px 0;
+    text-decoration: none; max-width: 100%;
+  }
+  .source-ref:hover { border-color: var(--accent); text-decoration: none; }
+  .sr-ico { color: var(--accent); }
+  .sr-file { background: none; color: var(--ink); padding: 0; word-break: break-all; }
+  .sr-sha { color: var(--ink-faint); }
+</style>

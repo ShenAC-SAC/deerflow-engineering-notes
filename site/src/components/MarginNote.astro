@@ -1,0 +1,24 @@
+---
+// 页边小注脚:放「风趣一点点」的旁白。宽屏浮到右侧空白,窄屏内联成卡片。
+---
+<aside class="margin-note">
+  <span class="mn-mark">✎</span><span class="mn-body"><slot /></span>
+</aside>
+
+<style>
+  .margin-note {
+    float: right; clear: right;
+    width: 215px; margin: 4px -250px 14px 24px;
+    font-size: .82rem; line-height: 1.55; color: var(--ink-dim);
+    border-left: 2px solid var(--accent);
+    padding-left: 12px;
+  }
+  .mn-mark { color: var(--accent); margin-right: 6px; }
+  @media (max-width: 1180px) {
+    .margin-note {
+      float: none; width: auto; margin: 16px 0;
+      background: var(--bg-panel); border-radius: 8px;
+      padding: 10px 12px 10px 14px;
+    }
+  }
+</style>

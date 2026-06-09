@@ -1,0 +1,129 @@
+---
+lang: en
+slug: 02-lead-agent-factory
+station: 2
+title: The lead-agent factory · an assembly line, not a brain
+sha: 0fb18e36
+sourceRefs:
+  - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/langgraph.json
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+
+Your one sentence has already crossed the frontend, walked through the Gateway, and become a run. Now it knocks on the door of `make_lead_agent()`. This stop is about how that door assembles "runtime options + application config" into a runnable LangGraph agent graph.
+
+Hold onto one idea — every detail below hangs off it: **this is an assembly line, not a brain.** The real "thinking" happens later, in the model, the tools, and the middleware. This function only bolts the parts together correctly and hands the graph off. It doesn't even run the graph itself.
+
+<FlowDiagram
+  caption="How a run reaches a compiled agent graph"
+  chart={`flowchart TD
+  FE["Frontend / API"] --> GW["DeerFlow Gateway · run_agent()"]
+  GW --> MK["make_lead_agent(config)"]
+  MK -->|"compat: resolve AppConfig"| RC["_get_runtime_config(config)"]
+  RC --> MLA["_make_lead_agent(config, app_config=...)"]
+  MLA --> CA["create_agent(model, tools, middleware, prompt, ThreadState)"]
+  CA --> G["compiled LangGraph agent graph"]`}
+/>
+
+## One function, two names
+
+Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. Don't roll your eyes at that underscore — it draws the most important boundary in the whole file.
+
+**`make_lead_agent(config)`** takes a single argument, because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="0fb18e36" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
+
+**`_make_lead_agent(config, *, app_config)`** is the real assembly function. That `*` makes `app_config` keyword-only — because both arguments are "config-like," and positional calls are too easy to confuse. Its work is deterministic: build the graph, step by step, from runtime options plus application config.
+
+<MarginNote>The underscore enforces nothing in Python — it's a gentleman's agreement. But here it carries real meaning: the outer one handles compatibility, the inner one does the work.</MarginNote>
+
+## How the runtime options get assembled
+
+`_get_runtime_config()` merges `config["configurable"]` and `config["context"]`. Note this is **not a mathematical union** — it's ordered: lay down `configurable` first, then let `context` overwrite same-named keys.
+
+The fields it reads are **per-run options**, not global application settings:
+
+```text
+model_name / model
+thinking_enabled
+reasoning_effort
+is_plan_mode
+subagent_enabled
+max_concurrent_subagents
+is_bootstrap
+agent_name
+```
+
+## How the model is chosen
+
+Model resolution has a clear priority:
+
+```text
+request model_name
+  > custom agent config model
+  > AppConfig.models[0]
+```
+
+If `thinking_enabled=True` but the selected model doesn't support thinking, the factory logs a warning and quietly turns `thinking_enabled` back off. You can overthink all you want; the model still has to agree.
+
+## The final formula
+
+Once every part is in place, the line emits this:
+
+```python
+create_agent(
+    model=create_chat_model(...),
+    tools=filtered_tools,
+    middleware=build_middlewares(...),
+    system_prompt=apply_prompt_template(...),
+    state_schema=ThreadState,
+)
+```
+
+The mental model, in one line:
+
+```text
+Lead Agent graph = model + tools + middleware + system_prompt + ThreadState
+```
+
+`create_agent()` provides the standard model-and-tool loop; DeerFlow only supplies the **materials** (model, tools) and the **policies** (middleware, prompt, state schema).
+
+<Philosophy>
+
+Why does `make_lead_agent` exist in such an awkward shape? Because it serves several hosts at once: the official LangGraph Server / Studio, the DeerFlow Gateway, embedded clients, tests — and it bridges two conventions, the older `configurable` and the newer `context`.
+
+`app_config` being retrievable from runtime config *and* having a global fallback is exactly that awkwardness: it lets the Gateway inject a hot-loaded config snapshot **without breaking the LangGraph Server ABI**.
+
+The real lesson: **keep compatibility boundaries explicit, and keep them in one place.** Funnel all the awkwardness into a single, clearly named adapter, and let the real assembly stay deterministic and clean. That beats sprinkling compatibility logic everywhere.
+
+</Philosophy>
+
+<Tradeoff leftTitle="Clean assembly · _make_lead_agent" rightTitle="Compat cost · make_lead_agent">
+  <Fragment slot="left">
+
+  - receives an explicit `AppConfig`
+  - assembles **deterministically** from runtime options
+  - easy to test, easy to reason about
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - single-arg ABI (LangGraph Server requires it)
+  - `app_config` via runtime config + global fallback
+  - `cfg` is overloaded; `config` is mutated in place
+
+  </Fragment>
+</Tradeoff>
+
+## Where it will trip you up
+
+- **`cfg` is an overloaded name.** It carries per-run options, but may also smuggle in infrastructure fields like `app_config`, `thread_id`, or `run_id`. Don't assume what `cfg` holds.
+- **`config` is mutated in place.** The factory writes `metadata` and `callbacks` into it — don't treat it as read-only.
+- **Bootstrap vs. custom agent is easy to mix up.** `setup_agent` shows up only in the bootstrap flow; `update_agent` only when chatting with an existing custom agent. Pick the wrong one and you call the wrong tool.
+- **Middleware order is assembled elsewhere, yet it's part of the final behavior.** Touch this line and you may quietly change runtime semantics — which is precisely the bill the next stop, "order is semantics," comes to collect.
+
+---
+
+That's the assembly line. Its entire virtue is being **boring**: deterministic, predictable, opinion-free. Next time we take apart `build_middlewares`, and watch how things get less boring once order starts having a temper.
