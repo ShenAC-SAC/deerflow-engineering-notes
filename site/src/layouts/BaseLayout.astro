@@ -1,0 +1,44 @@
+---
+import '../styles/theme.css';
+
+interface Props {
+  title: string;
+  lang?: 'zh' | 'en';
+  description?: string;
+}
+const { title, lang = 'zh', description = 'DeerFlow 源码阅读 · 可视化工程博客' } = Astro.props;
+
+const other = lang === 'zh' ? 'en' : 'zh';
+const altPath = Astro.url.pathname.replace(/^\/(zh|en)/, `/${other}`);
+const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
+---
+<!doctype html>
+<html lang={htmlLang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="bar">
+        <a class="brand" href={`/${lang}/`}>
+          <span class="prompt">deerflow://</span>source-reading<span class="blink">▌</span>
+        </a>
+        <span class="spacer"></span>
+        <a class="lang-switch" href={altPath}
+           style="font-family:var(--mono);font-size:.78rem;border:1px solid var(--bg-elev);border-radius:6px;padding:4px 9px;color:var(--ink-dim);">
+          {lang.toUpperCase()} → {other.toUpperCase()}
+        </a>
+      </div>
+    </header>
+
+    <slot />
+
+    <footer class="site-footer">
+      deerflow source-reading · 源码阅读可视化教程 · pinned &amp; anchored
+    </footer>
+  </body>
+</html>

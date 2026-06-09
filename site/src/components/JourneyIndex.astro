@@ -1,0 +1,74 @@
+---
+import StationCard from './StationCard.astro';
+import { JOURNEY, type Lang } from '../data/journey.ts';
+
+interface Props { lang: Lang; }
+const { lang } = Astro.props;
+
+const stations = [...JOURNEY].sort((a, b) => a.station - b.station);
+
+const copy = lang === 'zh'
+  ? {
+      kicker: 'deerflow · 源码阅读',
+      title: '请求的旅程',
+      sub: '跟着一个请求,走完它在 DeerFlow 里的一生。每一站是一张心智模型卡 —— 翻开就是一篇深读。',
+      legend: '● = 碰它会炸什么(风险) · 🔒 = 还没修到这一站',
+    }
+  : {
+      kicker: 'deerflow · source reading',
+      title: "The Request's Journey",
+      sub: 'Follow one request through its whole life inside DeerFlow. Each stop is a mental-model card — open it for the deep dive.',
+      legend: '● = blast radius if you touch it (risk) · 🔒 = not paved yet',
+    };
+---
+<section class="journey wrap">
+  <p class="label">{copy.kicker}</p>
+  <h1 class="journey-title">{copy.title}</h1>
+  <p class="journey-sub">{copy.sub}</p>
+
+  <ol class="spine">
+    {stations.map((s) => (
+      <li class="stop">
+        <span class="rail-node" aria-hidden="true"></span>
+        <StationCard
+          station={s.station}
+          title={s.title[lang]}
+          mentalModel={s.mentalModel[lang]}
+          risk={s.risk}
+          altitude={s.altitude}
+          status={s.status}
+          href={`/${lang}/journey/${s.station}`}
+          lang={lang}
+        />
+      </li>
+    ))}
+  </ol>
+
+  <p class="journey-legend label">{copy.legend}</p>
+</section>
+
+<style>
+  .journey { padding-top: 48px; padding-bottom: 24px; }
+  .journey-title { font-size: 2.6rem; margin: 6px 0 10px; letter-spacing: -.5px; }
+  .journey-sub { color: var(--ink-dim); max-width: 620px; margin: 0 0 36px; }
+
+  .spine { list-style: none; margin: 0; padding: 0; position: relative; }
+  .spine::before {
+    content: ""; position: absolute; left: 27px; top: 8px; bottom: 8px;
+    width: 2px; background: linear-gradient(var(--accent), transparent); opacity: .5;
+  }
+  .stop { position: relative; padding-left: 64px; margin: 0 0 18px; }
+  .rail-node {
+    position: absolute; left: 20px; top: 26px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--bg); border: 3px solid var(--accent);
+    box-shadow: 0 0 0 4px rgba(72,202,228,.15);
+  }
+  .journey-legend { margin-top: 34px; text-align: center; }
+
+  @media (max-width: 560px) {
+    .journey-title { font-size: 2rem; }
+    .stop { padding-left: 0; }
+    .spine::before, .rail-node { display: none; }
+  }
+</style>

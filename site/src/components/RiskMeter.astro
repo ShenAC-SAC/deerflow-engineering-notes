@@ -1,0 +1,17 @@
+---
+// 风险计:value 1..5 → ●●●○○
+interface Props { value: number; }
+const { value } = Astro.props;
+const v = Math.max(1, Math.min(5, Math.round(value)));
+const on = '●'.repeat(v);
+const off = '○'.repeat(5 - v);
+---
+<span class="risk-meter" aria-label={`风险 ${v}/5`} title={`碰它会炸什么 · 风险 ${v}/5`}>
+  <span class="risk-on">{on}</span><span class="risk-off">{off}</span>
+</span>
+
+<style>
+  .risk-meter { font-family: var(--mono); letter-spacing: 2px; font-size: .92em; white-space: nowrap; }
+  .risk-on { color: var(--risk); }
+  .risk-off { color: var(--ink-faint); }
+</style>

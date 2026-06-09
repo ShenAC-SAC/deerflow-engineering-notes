@@ -1,0 +1,14 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import JourneyIndex from '../../components/JourneyIndex.astro';
+
+export function getStaticPaths() {
+  return [{ params: { lang: 'zh' } }, { params: { lang: 'en' } }];
+}
+
+const lang = Astro.params.lang as 'zh' | 'en';
+const title = lang === 'zh' ? 'DeerFlow 源码之旅' : 'DeerFlow Source Journey';
+---
+<BaseLayout title={title} lang={lang}>
+  <JourneyIndex lang={lang} />
+</BaseLayout>

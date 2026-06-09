@@ -1,0 +1,75 @@
+---
+import RiskMeter from './RiskMeter.astro';
+
+interface Props {
+  station: number;
+  title: string;
+  mentalModel: string;
+  risk: number;
+  altitude: string;
+  status: 'published' | 'locked';
+  href?: string;
+  lang?: 'zh' | 'en';
+}
+const { station, title, mentalModel, risk, altitude, status, href, lang = 'zh' } = Astro.props;
+const locked = status === 'locked';
+const Tag = locked ? 'div' : 'a';
+const lockedLabel = lang === 'zh' ? '🔒 待解锁' : '🔒 Locked';
+const num = String(station).padStart(2, '0');
+---
+<Tag class:list={['station-card', { locked }]} href={locked ? undefined : href}>
+  <span class="st-badge">{num}</span>
+  <div class="st-body">
+    <h3 class="st-title">{title}</h3>
+    <p class="st-mm">「{mentalModel}」</p>
+    <div class="st-meta">
+      {locked ? (
+        <span class="st-locked">{lockedLabel}</span>
+      ) : (
+        <Fragment>
+          <span class="st-alt">{altitude}</span>
+          <RiskMeter value={risk} />
+        </Fragment>
+      )}
+    </div>
+  </div>
+  {!locked && <span class="st-go">→</span>}
+</Tag>
+
+<style>
+  .station-card {
+    display: flex; align-items: stretch; gap: 0;
+    background: var(--card); color: var(--card-ink);
+    border: 2px solid #0b1320; border-radius: var(--radius);
+    box-shadow: var(--shadow-hard);
+    text-decoration: none;
+    transition: transform .12s ease, box-shadow .12s ease;
+    overflow: hidden;
+  }
+  a.station-card:hover { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 var(--accent); }
+  .station-card.locked {
+    background: transparent; color: var(--ink-dim);
+    border: 2px dashed var(--ink-faint); box-shadow: none;
+  }
+  .st-badge {
+    font-family: var(--mono); font-weight: 800; font-size: 1.1rem;
+    display: flex; align-items: center; justify-content: center;
+    min-width: 56px; background: var(--accent); color: var(--accent-ink);
+  }
+  .locked .st-badge { background: transparent; color: var(--ink-faint); border-right: 2px dashed var(--ink-faint); }
+  .st-body { padding: 12px 14px; flex: 1; }
+  .st-title { margin: 0 0 2px; font-size: 1.05rem; color: var(--card-ink); }
+  .locked .st-title { color: var(--ink-dim); }
+  .st-mm { margin: 0 0 8px; font-size: .92rem; color: #41506b; }
+  .locked .st-mm { color: var(--ink-faint); }
+  .st-meta { display: flex; align-items: center; gap: 12px; }
+  .st-alt {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .08em;
+    background: #0b1320; color: var(--accent); padding: 2px 7px; border-radius: 5px;
+  }
+  .st-locked { font-family: var(--mono); font-size: .8rem; color: var(--ink-faint); }
+  .st-go {
+    display: flex; align-items: center; padding: 0 16px;
+    font-size: 1.4rem; color: var(--accent); font-weight: 800;
+  }
+</style>

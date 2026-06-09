@@ -1,0 +1,120 @@
+/* ============================================================
+   DeerFlow 教程博客 · 视觉识别「工程控制台 × neo-brutalist」
+   深色控制台底 + 硬投影白卡 + 青色签名强调
+   ============================================================ */
+:root {
+  --bg:        #0d1b2a;   /* 深蓝控制台底 */
+  --bg-panel:  #102537;   /* 面板 */
+  --bg-elev:   #16314a;   /* 抬升面 */
+  --ink:       #e0e1dd;   /* 主文字 */
+  --ink-dim:   #8d99ae;   /* 次要文字 */
+  --ink-faint: #5b6b82;
+  --accent:    #48cae4;   /* 青 · 签名色 */
+  --accent-ink:#03263a;
+  --risk:      #ef476f;   /* 风险/告警 */
+  --ok:        #06d6a0;
+  --card:      #ffffff;
+  --card-ink:  #1b263b;
+
+  --shadow-hard: 4px 4px 0 var(--accent);
+  --shadow-risk: 4px 4px 0 var(--risk);
+  --radius: 10px;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+
+  --maxw: 760px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(900px 500px at 80% -10%, rgba(72,202,228,.12), transparent 60%),
+    linear-gradient(var(--bg), var(--bg));
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.7;
+  font-size: 17px;
+  /* 极淡的工程网格纹理 */
+  background-attachment: fixed;
+}
+body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(72,202,228,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(72,202,228,.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3, h4 { line-height: 1.25; font-weight: 800; color: #fff; }
+h2 { margin-top: 2.4em; font-size: 1.55rem; }
+h3 { margin-top: 1.8em; font-size: 1.2rem; }
+h2 .anchor, h3 .anchor { color: var(--accent); opacity: .5; }
+
+p, li { color: var(--ink); }
+
+code {
+  font-family: var(--mono);
+  font-size: .9em;
+  background: var(--bg-elev);
+  color: var(--accent);
+  padding: .12em .4em;
+  border-radius: 5px;
+}
+pre {
+  font-family: var(--mono);
+  border: 1px solid var(--bg-elev);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  overflow-x: auto;
+}
+pre code { background: none; color: inherit; padding: 0; }
+
+.label {
+  font-family: var(--mono);
+  font-size: .72rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+/* 容器 */
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 22px; }
+
+/* 站点页眉 */
+.site-header {
+  position: sticky; top: 0; z-index: 20;
+  backdrop-filter: blur(8px);
+  background: rgba(13,27,42,.72);
+  border-bottom: 1px solid var(--bg-elev);
+}
+.site-header .bar {
+  max-width: 1080px; margin: 0 auto; padding: 12px 22px;
+  display: flex; align-items: center; gap: 14px;
+}
+.brand {
+  font-family: var(--mono); font-weight: 700; color: #fff;
+  display: flex; align-items: center; gap: 8px;
+}
+.brand .prompt { color: var(--accent); }
+.brand .blink { animation: blink 1.1s steps(2, start) infinite; color: var(--accent); }
+@keyframes blink { to { opacity: 0; } }
+.site-header .spacer { flex: 1; }
+
+footer.site-footer {
+  margin-top: 80px; padding: 28px 22px;
+  border-top: 1px solid var(--bg-elev);
+  color: var(--ink-faint); font-family: var(--mono); font-size: .8rem;
+  text-align: center;
+}
