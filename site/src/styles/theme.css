@@ -64,11 +64,12 @@ p, li { color: var(--ink); }
 
 code {
   font-family: var(--mono);
-  font-size: .9em;
-  background: var(--bg-elev);
-  color: var(--accent);
-  padding: .12em .4em;
+  font-size: .86em;
+  background: rgba(127,176,205,.10);
+  color: #b7d2e0;          /* 柔和低饱和,避免满屏刺眼青色「绑架信」 */
+  padding: .08em .36em;
   border-radius: 5px;
+  word-break: break-word;
 }
 pre {
   font-family: var(--mono);
@@ -79,12 +80,22 @@ pre {
 }
 pre code { background: none; color: inherit; padding: 0; }
 
-.label {
+/* 小标签工具类。注意:别叫 .label —— 会和 mermaid 内部的 .label 撞名,
+   把图里的节点文字强制大写(make_lead_agent → MAKE_LEAD_AGENT)。 */
+.eyebrow {
   font-family: var(--mono);
   font-size: .72rem;
   letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--ink-dim);
+}
+
+/* 防御:确保 mermaid 节点文字保持源码原样,绝不被全局规则大写/加字距 */
+.mermaid .label,
+.mermaid .nodeLabel,
+.mermaid .edgeLabel {
+  text-transform: none !important;
+  letter-spacing: normal !important;
 }
 
 ::selection { background: var(--accent); color: var(--accent-ink); }

@@ -5,14 +5,17 @@ interface Props {
   sha: string;
   symbol?: string;
   repo?: string;
+  full?: boolean;   // true=显示全路径(锚点框);默认只显示文件名(行内不笨重)
 }
-const { file, sha, symbol, repo = 'bytedance/deer-flow' } = Astro.props;
+const { file, sha, symbol, repo = 'bytedance/deer-flow', full = false } = Astro.props;
 const url = `https://github.com/${repo}/blob/${sha}/${file}`;
+const label = full ? file : file.split('/').pop();
+const text = `${label}${symbol ? `::${symbol}` : ''}`;
 ---
-<a class="source-ref" href={url} target="_blank" rel="noopener noreferrer">
+<a class="source-ref" href={url} target="_blank" rel="noopener noreferrer" title={`${file}${symbol ? `::${symbol}` : ''} @${sha.slice(0, 7)}`}>
   <span class="sr-ico" aria-hidden="true">⌖</span>
-  <code class="sr-file">{file}{symbol ? `::${symbol}` : ''}</code>
-  <span class="sr-sha">@{sha.slice(0, 7)}</span>
+  <code class="sr-file">{text}</code>
+  {full && <span class="sr-sha">@{sha.slice(0, 7)}</span>}
 </a>
 
 <style>

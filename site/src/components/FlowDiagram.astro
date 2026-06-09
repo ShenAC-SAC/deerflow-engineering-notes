@@ -14,9 +14,21 @@ const { chart, caption } = Astro.props;
   import mermaid from 'mermaid';
   mermaid.initialize({
     startOnLoad: false,
-    theme: 'dark',
+    theme: 'base',
     securityLevel: 'strict',
-    themeVariables: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+    themeVariables: {
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontSize: '14px',
+      background: '#102537',
+      primaryColor: '#16314a',        // 节点底
+      primaryBorderColor: '#48cae4',  // 节点青色描边
+      primaryTextColor: '#e8f6fb',    // 节点文字(高对比)
+      secondaryColor: '#16314a',
+      tertiaryColor: '#102537',
+      lineColor: '#6c8db0',           // 连线
+      edgeLabelBackground: '#102537',
+      clusterBkg: '#0d1b2a',
+    },
   });
   const run = () => mermaid.run({ querySelector: '.mermaid' });
   if (document.readyState !== 'loading') run();

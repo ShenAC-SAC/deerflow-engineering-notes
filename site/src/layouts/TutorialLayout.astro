@@ -42,9 +42,9 @@ const t = lang === 'zh'
     <MentalModel>{meta.mentalModel[lang]}</MentalModel>
 
     <div class="tut-refs">
-      <span class="label">{t.refs} · @{sha.slice(0, 7)}</span>
+      <span class="eyebrow">{t.refs} · @{sha.slice(0, 7)}</span>
       <div class="tut-refs-list">
-        {sourceRefs.map((f) => <SourceRef file={f} sha={sha} />)}
+        {sourceRefs.map((f) => <SourceRef file={f} sha={sha} full />)}
       </div>
     </div>
 
