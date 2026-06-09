@@ -29,7 +29,7 @@ const copy = lang === 'zh'
   <ol class="spine">
     {stations.map((s) => (
       <li class="stop">
-        <span class="rail-node" aria-hidden="true"></span>
+        <span class:list={['rail-node', { live: s.status === 'published' }]} aria-hidden="true"></span>
         <StationCard
           station={s.station}
           title={s.title[lang]}
@@ -48,28 +48,45 @@ const copy = lang === 'zh'
 </section>
 
 <style>
-  .journey { padding-top: 48px; padding-bottom: 24px; }
-  .journey-title { font-size: 2.6rem; margin: 6px 0 10px; letter-spacing: -.5px; }
-  .journey-sub { color: var(--ink-dim); max-width: 620px; margin: 0 0 36px; }
+  .journey { padding-top: 66px; padding-bottom: 24px; }
+  .journey-title {
+    font-size: 3.5rem; margin: 10px 0 14px; letter-spacing: -.02em; line-height: 1.04;
+  }
+  .journey-sub {
+    color: var(--ink-dim); max-width: 600px; margin: 0 0 46px; font-size: 1.06rem;
+  }
 
   .spine { list-style: none; margin: 0; padding: 0; position: relative; }
-  .stop { position: relative; padding-left: 64px; margin: 0 0 18px; }
+  .stop { position: relative; padding-left: 70px; margin: 0 0 16px; }
   /* 逐段连接:每站从自己节点画到下一站节点,最后一站不画 → 全程贯通、不半路断 */
   .stop:not(:last-child)::before {
-    content: ""; position: absolute; left: 27px; top: 34px;
-    height: calc(100% + 18px); width: 2px; background: rgba(72,202,228,.28);
+    content: ""; position: absolute; left: 29px; top: 36px;
+    height: calc(100% + 16px); width: 2px; background: rgba(92,200,232,.26);
   }
   .rail-node {
-    position: absolute; left: 20px; top: 26px;
+    position: absolute; left: 22px; top: 28px;
     width: 16px; height: 16px; border-radius: 50%;
     background: var(--bg); border: 3px solid var(--accent);
-    box-shadow: 0 0 0 4px rgba(72,202,228,.15);
+    box-shadow: 0 0 0 4px rgba(92,200,232,.12);
   }
-  .journey-legend { margin-top: 34px; text-align: center; }
+  /* 当前激活的站:暖琥珀 + 呼吸 */
+  .rail-node.live {
+    border-color: var(--amber);
+    box-shadow: 0 0 0 4px rgba(244,161,74,.16), 0 0 18px rgba(244,161,74,.5);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(244,161,74,.16), 0 0 14px rgba(244,161,74,.35); }
+    50%      { box-shadow: 0 0 0 5px rgba(244,161,74,.22), 0 0 26px rgba(244,161,74,.65); }
+  }
+  .journey-legend { margin-top: 40px; text-align: center; }
 
   @media (max-width: 560px) {
-    .journey-title { font-size: 2rem; }
+    .journey-title { font-size: 2.3rem; }
     .stop { padding-left: 0; }
     .stop::before, .rail-node { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rail-node.live { animation: none; }
   }
 </style>

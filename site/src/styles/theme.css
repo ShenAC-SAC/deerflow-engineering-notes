@@ -1,96 +1,137 @@
 /* ============================================================
-   DeerFlow 教程博客 · 视觉识别「工程控制台 × neo-brutalist」
-   深色控制台底 + 硬投影白卡 + 青色签名强调
+   DeerFlow 教程博客 · 视觉识别「Blueprint Noir · 工程手记」
+   蓝图青(冷·机器/结构) × 信号琥珀(暖·请求/当前) 双色温
+   衬线 display(Fraunces/宋体) + 暖调 grotesque 正文 + mono 代码
    ============================================================ */
 :root {
-  --bg:        #0d1b2a;   /* 深蓝控制台底 */
-  --bg-panel:  #102537;   /* 面板 */
-  --bg-elev:   #16314a;   /* 抬升面 */
-  --ink:       #e0e1dd;   /* 主文字 */
-  --ink-dim:   #8d99ae;   /* 次要文字 */
-  --ink-faint: #5b6b82;
-  --accent:    #48cae4;   /* 青 · 签名色 */
-  --accent-ink:#03263a;
-  --risk:      #ef476f;   /* 风险/告警 */
-  --ok:        #06d6a0;
-  --card:      #ffffff;
-  --card-ink:  #1b263b;
+  /* —— 墨色层次 —— */
+  --bg:        #0e131b;   /* 基础底(偏冷的近黑) */
+  --bg-panel:  #141b26;   /* 面板 */
+  --bg-elev:   #1b2533;   /* 抬升面 */
+  --line:      #25303f;   /* 发丝分隔线 */
 
-  --shadow-hard: 4px 4px 0 var(--accent);
-  --shadow-risk: 4px 4px 0 var(--risk);
-  --radius: 10px;
+  /* —— 纸墨文字 —— */
+  --ink:       #ece7dd;   /* 暖白正文(非纯白) */
+  --ink-dim:   #9aabbb;   /* 次要 */
+  --ink-faint: #607387;   /* 更弱 */
 
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-          "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  /* —— 双色温签名 —— */
+  --accent:    #5cc8e8;   /* 蓝图青:结构/轨道/链接/未解锁 */
+  --accent-ink:#06222e;
+  --amber:     #f4a14a;   /* 信号琥珀:当前/激活/主行动 */
+  --amber-ink: #2a1b06;
+  --amber-deep:#80531f;
+  --risk:      #ef5b6b;   /* 珊瑚红:风险 */
+  --ok:        #7fc9a1;   /* 鼠尾草绿:工程哲学 */
 
-  --maxw: 760px;
+  --card:      #141b26;   /* 卡面(深色田野笔记,非白块) */
+  --card-ink:  var(--ink);
+
+  --shadow-soft: 0 14px 40px -18px rgba(0,0,0,.7);
+  --radius: 12px;
+
+  /* —— 字族 —— */
+  --display: "Fraunces", "Songti SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+  --sans: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "PingFang SC",
+          "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "Spline Sans Mono", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+
+  --maxw: 720px;
+
+  /* —— 颗粒噪点 —— */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 * { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
   background:
-    radial-gradient(900px 500px at 80% -10%, rgba(72,202,228,.12), transparent 60%),
-    linear-gradient(var(--bg), var(--bg));
+    radial-gradient(1100px 620px at 88% -8%, rgba(92,200,232,.10), transparent 62%),
+    radial-gradient(900px 600px at 0% 108%, rgba(244,161,74,.07), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--sans);
-  line-height: 1.7;
-  font-size: 17px;
-  /* 极淡的工程网格纹理 */
-  background-attachment: fixed;
+  font-size: 18px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+/* 极淡蓝图网格 */
 body::before {
-  content: "";
-  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
   background-image:
-    linear-gradient(rgba(72,202,228,.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(72,202,228,.04) 1px, transparent 1px);
-  background-size: 32px 32px;
+    linear-gradient(rgba(92,200,232,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(92,200,232,.035) 1px, transparent 1px);
+  background-size: 38px 38px;
+  mask-image: radial-gradient(120% 90% at 50% 0%, #000 35%, transparent 90%);
+}
+/* 颗粒噪点 */
+body::after {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image: var(--grain); opacity: .04; mix-blend-mode: overlay;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a { color: var(--accent); text-decoration: none; transition: color .15s; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
 
-h1, h2, h3, h4 { line-height: 1.25; font-weight: 800; color: #fff; }
-h2 { margin-top: 2.4em; font-size: 1.55rem; }
-h3 { margin-top: 1.8em; font-size: 1.2rem; }
-h2 .anchor, h3 .anchor { color: var(--accent); opacity: .5; }
+/* 衬线 display 标题 = 编辑气质 */
+h1, h2, h3, h4 {
+  font-family: var(--display);
+  font-weight: 600;
+  line-height: 1.15;
+  color: #fbfaf6;
+  font-optical-sizing: auto;
+}
+h2 {
+  margin-top: 2.6em; font-size: 1.7rem; letter-spacing: -.01em;
+  padding-bottom: .3em; position: relative;
+}
+/* h2 前的小琥珀刻度,像手记的小节标记 */
+h2::before {
+  content: ""; position: absolute; left: -18px; top: .34em;
+  width: 7px; height: 7px; background: var(--amber); border-radius: 1px;
+  transform: rotate(45deg);
+}
+h3 { margin-top: 2em; font-size: 1.3rem; color: #eef1f3; }
 
 p, li { color: var(--ink); }
+strong { color: #fff; font-weight: 700; }
 
 code {
   font-family: var(--mono);
-  font-size: .86em;
-  background: rgba(127,176,205,.10);
-  color: #b7d2e0;          /* 柔和低饱和,避免满屏刺眼青色「绑架信」 */
-  padding: .08em .36em;
+  font-size: .85em;
+  background: rgba(92,200,232,.09);
+  color: #aee0f0;
+  padding: .08em .38em;
   border-radius: 5px;
   word-break: break-word;
 }
 pre {
   font-family: var(--mono);
-  border: 1px solid var(--bg-elev);
+  background: #0c121b;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 16px 18px;
   overflow-x: auto;
+  font-size: .9rem;
+  box-shadow: var(--shadow-soft);
 }
 pre code { background: none; color: inherit; padding: 0; }
 
-/* 小标签工具类。注意:别叫 .label —— 会和 mermaid 内部的 .label 撞名,
-   把图里的节点文字强制大写(make_lead_agent → MAKE_LEAD_AGENT)。 */
+/* 小标签工具类(别叫 .label —— 会和 mermaid 内部 .label 撞名) */
 .eyebrow {
   font-family: var(--mono);
   font-size: .72rem;
-  letter-spacing: .12em;
+  letter-spacing: .18em;
   text-transform: uppercase;
-  color: var(--ink-dim);
+  color: var(--ink-faint);
 }
 
-/* 防御:确保 mermaid 节点文字保持源码原样,绝不被全局规则大写/加字距 */
+/* 防御:mermaid 节点文字保持源码原样大小写 */
 .mermaid .label,
 .mermaid .nodeLabel,
 .mermaid .edgeLabel {
@@ -98,34 +139,41 @@ pre code { background: none; color: inherit; padding: 0; }
   letter-spacing: normal !important;
 }
 
-::selection { background: var(--accent); color: var(--accent-ink); }
+::selection { background: var(--amber); color: var(--amber-ink); }
 
 /* 容器 */
-.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 22px; }
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
 
 /* 站点页眉 */
 .site-header {
   position: sticky; top: 0; z-index: 20;
-  backdrop-filter: blur(8px);
-  background: rgba(13,27,42,.72);
-  border-bottom: 1px solid var(--bg-elev);
+  backdrop-filter: blur(10px) saturate(1.2);
+  background: linear-gradient(rgba(14,19,27,.86), rgba(14,19,27,.62));
+  border-bottom: 1px solid var(--line);
 }
 .site-header .bar {
-  max-width: 1080px; margin: 0 auto; padding: 12px 22px;
+  max-width: 1100px; margin: 0 auto; padding: 13px 24px;
   display: flex; align-items: center; gap: 14px;
 }
 .brand {
-  font-family: var(--mono); font-weight: 700; color: #fff;
-  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-weight: 600; font-size: .95rem; color: #fbfaf6;
+  display: flex; align-items: center; gap: 2px; letter-spacing: -.01em;
 }
 .brand .prompt { color: var(--accent); }
-.brand .blink { animation: blink 1.1s steps(2, start) infinite; color: var(--accent); }
+.brand .blink { color: var(--amber); animation: blink 1.15s steps(2, start) infinite; }
 @keyframes blink { to { opacity: 0; } }
 .site-header .spacer { flex: 1; }
 
+.lang-switch {
+  font-family: var(--mono); font-size: .76rem; letter-spacing: .04em;
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px;
+  color: var(--ink-dim); transition: border-color .15s, color .15s;
+}
+.lang-switch:hover { border-color: var(--amber); color: var(--amber); text-decoration: none; }
+
 footer.site-footer {
-  margin-top: 80px; padding: 28px 22px;
-  border-top: 1px solid var(--bg-elev);
-  color: var(--ink-faint); font-family: var(--mono); font-size: .8rem;
-  text-align: center;
+  margin-top: 96px; padding: 30px 24px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint); font-family: var(--mono); font-size: .78rem;
+  letter-spacing: .04em; text-align: center;
 }

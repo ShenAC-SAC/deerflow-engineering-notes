@@ -19,6 +19,12 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..500&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Spline+Sans+Mono:ital,wght@0,400..600;1,400&display=swap"
+      rel="stylesheet"
+    />
     <title>{title}</title>
   </head>
   <body>
@@ -28,8 +34,7 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
           <span class="prompt">deerflow://</span>source-reading<span class="blink">▌</span>
         </a>
         <span class="spacer"></span>
-        <a class="lang-switch" href={altPath}
-           style="font-family:var(--mono);font-size:.78rem;border:1px solid var(--bg-elev);border-radius:6px;padding:4px 9px;color:var(--ink-dim);">
+        <a class="lang-switch" href={altPath}>
           {lang.toUpperCase()} → {other.toUpperCase()}
         </a>
       </div>

@@ -36,7 +36,7 @@ src/
   layouts/                        BaseLayout / TutorialLayout
   pages/[lang]/index.astro        旅程首页
   pages/[lang]/journey/[station]  深读页(仅 published)
-  styles/theme.css                视觉识别:工程控制台 × neo-brutalist
+  styles/theme.css                视觉识别:Blueprint Noir(蓝图青×信号琥珀双色温·衬线编辑风)
 scripts/check-source-refs.mjs     锚定校验脚本
 ```
 

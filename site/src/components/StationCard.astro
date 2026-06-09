@@ -14,17 +14,17 @@ interface Props {
 const { station, title, mentalModel, risk, altitude, status, href, lang = 'zh' } = Astro.props;
 const locked = status === 'locked';
 const Tag = locked ? 'div' : 'a';
-const lockedLabel = lang === 'zh' ? '🔒 待解锁' : '🔒 Locked';
+const lockedLabel = lang === 'zh' ? '待解锁' : 'Locked';
 const num = String(station).padStart(2, '0');
 ---
 <Tag class:list={['station-card', { locked }]} href={locked ? undefined : href}>
   <span class="st-badge">{num}</span>
   <div class="st-body">
     <h3 class="st-title">{title}</h3>
-    <p class="st-mm">「{mentalModel}」</p>
+    <p class="st-mm">{mentalModel}</p>
     <div class="st-meta">
       {locked ? (
-        <span class="st-locked">{lockedLabel}</span>
+        <span class="st-locked">🔒 {lockedLabel}</span>
       ) : (
         <Fragment>
           <span class="st-alt">{altitude}</span>
@@ -38,38 +38,67 @@ const num = String(station).padStart(2, '0');
 
 <style>
   .station-card {
-    display: flex; align-items: stretch; gap: 0;
-    background: var(--card); color: var(--card-ink);
-    border: 2px solid #0b1320; border-radius: var(--radius);
-    box-shadow: var(--shadow-hard);
+    display: flex; align-items: stretch;
+    border-radius: var(--radius);
     text-decoration: none;
-    transition: transform .12s ease, box-shadow .12s ease;
     overflow: hidden;
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
   }
-  a.station-card:hover { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 var(--accent); }
+  /* 激活的站 = 暖琥珀,一份温度在冷蓝图里 */
+  a.station-card {
+    background: linear-gradient(100deg, rgba(244,161,74,.07), var(--card) 46%);
+    border: 1px solid rgba(244,161,74,.34);
+    box-shadow: var(--shadow-soft);
+  }
+  a.station-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--amber);
+    box-shadow: 0 22px 50px -22px rgba(244,161,74,.45);
+  }
+  /* 未解锁 = 冷蓝图虚线、低调 */
   .station-card.locked {
-    background: transparent; color: var(--ink-dim);
-    border: 2px dashed var(--ink-faint); box-shadow: none;
+    background: rgba(92,200,232,.015);
+    border: 1px dashed var(--line);
   }
+
   .st-badge {
-    font-family: var(--mono); font-weight: 800; font-size: 1.1rem;
+    font-family: var(--display); font-weight: 600; font-size: 2.5rem; line-height: 1;
     display: flex; align-items: center; justify-content: center;
-    min-width: 56px; background: var(--accent); color: var(--accent-ink);
+    min-width: 88px; color: var(--amber);
+    border-right: 1px solid rgba(244,161,74,.22);
   }
-  .locked .st-badge { background: transparent; color: var(--ink-faint); border-right: 2px dashed var(--ink-faint); }
-  .st-body { padding: 12px 14px; flex: 1; }
-  .st-title { margin: 0 0 2px; font-size: 1.05rem; color: var(--card-ink); }
-  .locked .st-title { color: var(--ink-dim); }
-  .st-mm { margin: 0 0 8px; font-size: .92rem; color: #41506b; }
+  .locked .st-badge {
+    color: var(--ink-faint); border-right: 1px dashed var(--line);
+  }
+
+  .st-body { padding: 16px 22px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  .st-title {
+    margin: 0 0 4px; font-family: var(--sans); font-weight: 700;
+    font-size: 1.14rem; color: #fbfaf6; letter-spacing: -.01em; line-height: 1.3;
+  }
+  .locked .st-title { color: var(--ink-dim); font-weight: 600; }
+  .st-mm {
+    margin: 0 0 11px; font-family: var(--display); font-style: italic;
+    font-size: 1.04rem; color: var(--ink-dim);
+  }
   .locked .st-mm { color: var(--ink-faint); }
-  .st-meta { display: flex; align-items: center; gap: 12px; }
+
+  .st-meta { display: flex; align-items: center; gap: 14px; }
   .st-alt {
-    font-family: var(--mono); font-size: .72rem; letter-spacing: .08em;
-    background: #0b1320; color: var(--accent); padding: 2px 7px; border-radius: 5px;
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid rgba(92,200,232,.32);
+    padding: 2px 9px; border-radius: 20px;
   }
-  .st-locked { font-family: var(--mono); font-size: .8rem; color: var(--ink-faint); }
+  .st-locked { font-family: var(--mono); font-size: .74rem; letter-spacing: .05em; color: var(--ink-faint); }
+
   .st-go {
-    display: flex; align-items: center; padding: 0 16px;
-    font-size: 1.4rem; color: var(--accent); font-weight: 800;
+    display: flex; align-items: center; padding: 0 24px;
+    font-size: 1.5rem; color: var(--amber); transition: transform .2s ease;
+  }
+  a.station-card:hover .st-go { transform: translateX(4px); }
+
+  @media (max-width: 560px) {
+    .st-badge { min-width: 64px; font-size: 2rem; }
+    .st-go { display: none; }
   }
 </style>
