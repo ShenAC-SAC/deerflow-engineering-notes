@@ -63,13 +63,16 @@ const copy = lang === 'zh'
   .journey { padding-top: 60px; padding-bottom: 24px; }
 
   /* —— Hero —— */
-  .hero { max-width: 640px; margin-bottom: 30px; }
+  /* 不卡 640:让英文长标题能在整栏(~672px)排成一行 */
+  .hero { margin-bottom: 30px; }
   .hero-kicker { color: var(--blue); }
   .hero-title {
-    font-size: 3.1rem; margin: 14px 0 16px; letter-spacing: -.02em; line-height: 1.06;
+    font-size: 3rem; margin: 14px 0 16px; letter-spacing: -.02em; line-height: 1.06;
+    text-wrap: balance;
   }
   .hero-sub {
     color: var(--ink-2); margin: 0 0 22px; font-size: 1.08rem; line-height: 1.7;
+    max-width: 640px;
   }
   .progress-chip {
     display: inline-block; margin: 0;
