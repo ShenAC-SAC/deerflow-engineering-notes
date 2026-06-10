@@ -39,9 +39,9 @@ export const JOURNEY: Station[] = [
   {
     station: 3, slug: '03-tools-assembly', risk: 4, altitude: '架构', status: 'published',
     title: { zh: '工具装配', en: 'Tool assembly' },
-    mentalModel: { zh: '工具配上了，模型不一定看得到', en: 'A configured tool can stay hidden' },
+    mentalModel: { zh: '工具配上了，不代表会暴露给模型', en: 'A configured tool can stay hidden' },
     teaser: {
-      zh: '工具列表不是静态注册表。一次 run 能看见哪些工具，取决于配置、模型能力、沙箱、skill 和 MCP 策略。',
+      zh: '工具列表不是静态注册表。一次 run 会暴露哪些工具，取决于配置、模型能力、沙箱、skill 和 MCP 策略。',
       en: 'A run sees tools through config, model capability, sandbox rules, skills, and MCP policy, not through a static registry.',
     },
   },
@@ -77,7 +77,7 @@ export const JOURNEY: Station[] = [
     title: { zh: '技能系统', en: 'Skill system' },
     mentalModel: { zh: '把最小权限写进工具策略', en: 'Least privilege belongs in tool policy' },
     teaser: {
-      zh: 'skill 不只是追加 prompt，还能用 allowed_tools 收窄工具集，把最小权限落到运行时。',
+      zh: 'skill 不只是追加 prompt，还能用 allowed_tools 收敛工具集，把最小权限落到运行时。',
       en: 'A skill does more than append prompt text; allowed_tools narrows the runtime toolset.',
     },
   },

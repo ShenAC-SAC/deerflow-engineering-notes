@@ -16,7 +16,7 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 上一章里，用户输入已经被 Gateway 登记成一次 run。现在它进入 `make_lead_agent()`：这一章看 DeerFlow 如何把「运行时选项 + 应用配置」装配成一张可运行的 LangGraph agent 图。
 
-先记住一件事，后面所有细节都挂在它上面：**这里是装配线，不负责思考。** 真正的推理发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去。它装完就退场，连图都不亲自执行。
+先记住一件事，后面所有细节都围绕它展开：**这里是装配线，不负责思考。** 真正的推理发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去。它装完就退场，连图都不亲自执行。
 
 <FlowDiagram
   caption="一次 run 怎么走到一张编译好的 agent 图"
@@ -66,11 +66,11 @@ agent_name
   > AppConfig.models[0]
 ```
 
-如果 `thinking_enabled=True`、但选中的模型并不支持思考，工厂会记一条 warning，然后把 `thinking_enabled` 关掉。想开 thinking mode，也得看模型支不支持。
+如果 `thinking_enabled=True`，但选中的模型并不支持 thinking，工厂会记一条 warning，然后把 `thinking_enabled` 关掉。想开启 thinking mode，也得看模型支不支持。
 
 ## 最终配方
 
-所有零件就位后，装配线吐出这么一行：
+所有零件就位后，最终调用会收束成这样：
 
 ```python
 create_agent(
@@ -88,7 +88,7 @@ create_agent(
 Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
 ```
 
-`create_agent()` 提供标准的「模型 ↔ 工具」循环；DeerFlow 只负责备齐**材料**（模型、工具）和**运行约束**（中间件、prompt、状态结构）。
+`create_agent()` 提供标准的「模型 ↔ 工具」循环；DeerFlow 在这里负责备齐**材料**（模型、工具）和**运行约束**（中间件、prompt、状态结构）。
 
 <Philosophy>
 

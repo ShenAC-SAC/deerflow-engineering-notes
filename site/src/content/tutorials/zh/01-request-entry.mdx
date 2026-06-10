@@ -15,9 +15,9 @@ import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 
-每个 Agent 系统在显得聪明之前，都要先回答一个朴素问题：谁负责接住请求？你在前端敲下的一句话，不能直接交给模型。它要先被登记成一次有 ID、有生命周期、能被流式观察的 **run**，模型才有机会开口。这一章看 DeerFlow 如何接住输入、创建 run、装入运行时上下文，再把执行事件持续流回前端。
+每个 Agent 系统开始回答之前，都要先解决一个朴素问题：谁负责接住请求？你在前端敲下的一句话，不能直接交给模型。它要先被登记成一次有 ID、有生命周期、可流式观察的 **run**，模型才有机会开口。这一章看 DeerFlow 如何接住输入、创建 run、装入运行时上下文，再把执行事件持续流回前端。
 
-先记住一条边界：**DeerFlow 先把一次运行托管起来，才轮到 agent 做推理。** Gateway 就是这个运行时宿主：它负责接入、run 生命周期、上下文注入、事件流和结束判定。真正的「思考」，要到图开始执行之后才发生。
+先记住一条边界：**DeerFlow 先托管一次运行，才轮到 agent 做推理。** Gateway 就是这个运行时宿主：它负责接入、run 生命周期、上下文注入、事件流和结束判定。真正的推理，要到图开始执行之后才发生。
 
 <FlowDiagram
   caption="一句话进来，怎么变成一次在后台执行、向前台流事件的 run"
@@ -71,7 +71,7 @@ config["configurable"]   旧的运行时选项通道
 config["context"]        新的 LangGraph runtime context 通道
 ```
 
-DeerFlow 在兼容模式下，会把关键字段**同时写进两边**——`model_name`、`mode`、`thinking_enabled`、`reasoning_effort`、`is_plan_mode`、`subagent_enabled`、`agent_name`、`is_bootstrap` 这些白名单字段，两个通道各放一份。为什么这么「浪费」？因为老的 DeerFlow 代码从 `configurable` 读，新的 `ToolRuntime.context` 从 `context` 读；只写一边，就会有一类消费者读不到。
+DeerFlow 在兼容模式下，会把关键字段**同时写进两边**——`model_name`、`mode`、`thinking_enabled`、`reasoning_effort`、`is_plan_mode`、`subagent_enabled`、`agent_name`、`is_bootstrap` 这些白名单字段，两个通道各放一份。这不是浪费，而是兼容成本：老的 DeerFlow 代码从 `configurable` 读，新的 `ToolRuntime.context` 从 `context` 读；只写一边，就会有一类消费者读不到。
 
 随后 `run_agent()` 还会建一个 LangGraph `Runtime`，把 `thread_id / run_id / user_id / app_config` 这些 run 级数据装进 `runtime.context`，再塞回 `config["configurable"]["__pregel_runtime"]`，让下游中间件和工具都能按 LangGraph 的运行时 API 拿到它。
 
@@ -79,13 +79,13 @@ DeerFlow 在兼容模式下，会把关键字段**同时写进两边**——`mod
 
 为什么 Gateway 要自己重写一套 LangGraph 兼容 API，而不直接用官方 LangGraph Server？
 
-因为这样 DeerFlow 才能**亲自掌管**那些「应用级」的东西：鉴权、thread/run 元数据、run 事件存储、SSE 桥、回滚、前端兼容、热加载边界、自己的持久化。这些都不是「图怎么跑」的事，而是「一个产品怎么把图作为服务提供出去」的事。
+因为这样 DeerFlow 才能**自己把控**那些应用级问题：鉴权、thread/run 元数据、run 事件存储、SSE 桥、回滚、前端兼容、热加载边界、自己的持久化。这些都不是「图怎么跑」的问题，而是「一个产品如何把图作为服务交付出去」的问题。
 
-代价是一层兼容胶水：请求字段要翻译成 LangGraph 风味的 config，stream mode 要做映射，运行时上下文要手动装。真正的教训是——**把兼容成本收敛在入口层，让下游的图执行保持干净。** 内核管执行，宿主扛兼容。
+代价是一层兼容适配：请求字段要翻译成 LangGraph 风格的 config，stream mode 要做映射，运行时上下文要手动装配。真正的教训是——**把兼容成本收敛在入口层，让下游的图执行保持干净。** 内核管执行，宿主扛兼容。
 
 </Philosophy>
 
-<Tradeoff leftTitle="自己当宿主 · Gateway" rightTitle="代价 · 兼容胶水">
+<Tradeoff leftTitle="自己当宿主 · Gateway" rightTitle="代价 · 兼容适配">
   <Fragment slot="left">
 
   - 自己掌握鉴权 / 元数据 / 回滚 / 持久化
@@ -95,9 +95,9 @@ DeerFlow 在兼容模式下，会把关键字段**同时写进两边**——`mod
   </Fragment>
   <Fragment slot="right">
 
-  - 字段要翻成 LangGraph 风味的 config
+  - 字段要翻成 LangGraph 风格的 config
   - `configurable` / `context` 双写，历史债
-  - `run_agent()` 一个函数扛了太多事
+  - `run_agent()` 职责集中，局部修改成本高
 
   </Fragment>
 </Tradeoff>
@@ -105,7 +105,7 @@ DeerFlow 在兼容模式下，会把关键字段**同时写进两边**——`mod
 ## 会绊倒你的地方
 
 - **`configurable` 和 `context` 是历史兼容债。** 某个字段只写了一边，老代码或新 `ToolRuntime.context` 消费者就可能读空。加新字段时，先确认它该进哪个白名单、是不是要双写。
-- **`run_agent()` 这个函数，什么都管。** 它把图调用、持久化、流式发布、回滚、tracing、清理全塞在一条路径上——功能很全，但也因此又重又挤。改它之前，先认清你动的是哪一段。
+- **`run_agent()` 的职责偏重。** 它把图调用、持久化、流式发布、回滚、tracing、清理放在同一条路径上——功能很全，但也因此更难局部修改。改它之前，先认清你动的是哪一段。
 - **它走后台 task。** 断连、取消、回滚、最终 checkpoint 落盘都得小心处理，否则可能把「跑了一半的状态」当成功返回。
 - **它不直接改 `ThreadState`。** run 记录、thread 元数据、流事件是 Gateway 写的；agent 的图状态由图执行自己写。看到状态变化，先分清是哪一层负责写入。
 
