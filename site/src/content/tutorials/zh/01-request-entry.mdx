@@ -15,7 +15,7 @@ import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 
-每个 Agent 系统在显得聪明之前，都要先回答一个朴素问题：谁负责接住请求？你在前端敲下的一句话，不能直接交给模型。它要先被登记成一次有身份、有生命周期、能被流式观察的 **run**，模型才有机会开口。这一章看 DeerFlow 如何接住输入、创建 run、装入运行时上下文，再把执行事件持续流回前端。
+每个 Agent 系统在显得聪明之前，都要先回答一个朴素问题：谁负责接住请求？你在前端敲下的一句话，不能直接交给模型。它要先被登记成一次有 ID、有生命周期、能被流式观察的 **run**，模型才有机会开口。这一章看 DeerFlow 如何接住输入、创建 run、装入运行时上下文，再把执行事件持续流回前端。
 
 先记住一条边界：**DeerFlow 先把一次运行托管起来，才轮到 agent 做推理。** Gateway 就是这个运行时宿主：它负责接入、run 生命周期、上下文注入、事件流和结束判定。真正的「思考」，要到图开始执行之后才发生。
 
@@ -36,7 +36,7 @@ import SourceRef from '../../../components/SourceRef.astro';
   SB --> SSE`}
 />
 
-## 两个「运行时」，别搞混
+## 三种「运行时」，别搞混
 
 读这一段最容易踩的坑，是把三样东西混成一样：
 
@@ -58,7 +58,7 @@ DeerFlow Gateway  = 当前主要的 HTTP 运行时，兼容 LangGraph API
 
 **`RunManager`** —— run 的登记处。`create_or_reject()` 决定这次请求能不能创建 run（比如同一 thread 已经在跑、按 `multitask_strategy` 该拒就拒），之后负责 `set_status` / `cancel` / 持久化 run 元数据。
 
-**`StreamBridge`** —— 一道解耦闸。后台图在产事件，HTTP 这边在消费事件，两边不直接互相阻塞：`run_agent()` 往 bridge 里发，`sse_consumer()` 从 bridge 里取、再格式化成 SSE 事件。前端断了，后台也不至于跟着塌。
+**`StreamBridge`** —— 一道解耦闸。后台图在产事件，HTTP 这边在消费事件，两边不直接互相阻塞：`run_agent()` 往 bridge 里发，`sse_consumer()` 从 bridge 里取、再格式化成 SSE 事件。即使前端断开，后台任务也不会被迫中断。
 
 **`run_agent()`** —— 真正干活的后台 worker（<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="0fb18e36" />）。注意：**它不是 agent 本身，而是托管 agent 执行的后台任务。**
 
@@ -107,7 +107,7 @@ DeerFlow 在兼容模式下，会把关键字段**同时写进两边**——`mod
 - **`configurable` 和 `context` 是历史兼容债。** 某个字段只写了一边，老代码或新 `ToolRuntime.context` 消费者就可能读空。加新字段时，先确认它该进哪个白名单、是不是要双写。
 - **`run_agent()` 是个「编排重」函数。** 它把图调用、持久化、流式发布、回滚、tracing、清理放在同一条路径里——强大，但也密。改它之前先认清你在改哪一段。
 - **它走后台 task。** 断连、取消、回滚、最终 checkpoint 落盘都得小心处理，否则可能把「跑了一半的状态」当成功返回。
-- **它不直接改 `ThreadState`。** run 记录、thread 元数据、流事件是 Gateway 写的；agent 的图状态由图执行自己写。看到状态变化，先分清是谁动的手。
+- **它不直接改 `ThreadState`。** run 记录、thread 元数据、流事件是 Gateway 写的；agent 的图状态由图执行自己写。看到状态变化，先分清是哪一层负责写入。
 
 ---
 

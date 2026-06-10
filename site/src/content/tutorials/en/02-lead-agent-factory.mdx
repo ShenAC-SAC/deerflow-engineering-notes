@@ -2,7 +2,7 @@
 lang: en
 slug: 02-lead-agent-factory
 station: 2
-title: Lead-agent factory · assembly line, not a mind
+title: Lead-agent factory · assembly line, not the brain
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
@@ -16,7 +16,7 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 Your prompt has crossed the frontend, passed through the Gateway, and become a run. Now it reaches `make_lead_agent()`. This stop is about how runtime options plus application config become a runnable LangGraph agent graph.
 
-Hold onto one idea: **this is an assembly line, not a mind.** The reasoning happens later, inside the model-tool-middleware loop. This function only bolts the parts together and hands off the compiled graph. It does not even run the graph itself.
+Hold onto one idea: **this is an assembly line, not the brain.** Reasoning happens later, inside the model-tool-middleware loop. This function only bolts the parts together and hands off the compiled graph. It does not even run the graph itself.
 
 <FlowDiagram
   caption="How a run reaches a compiled agent graph"
@@ -31,7 +31,7 @@ Hold onto one idea: **this is an assembly line, not a mind.** The reasoning happ
 
 ## One factory, two entry points
 
-Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. Don't roll your eyes at that underscore — it draws the most important boundary in the whole file.
+Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. The underscore is not cosmetic: it marks the most important boundary in the file.
 
 **`make_lead_agent(config)`** takes a single argument because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="0fb18e36" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
 
@@ -119,10 +119,10 @@ The real lesson: **keep compatibility boundaries explicit, and keep them in one 
 
 ## Where it will trip you up
 
-- **`cfg` is an overloaded name.** It carries per-run options, but may also smuggle in infrastructure fields like `app_config`, `thread_id`, or `run_id`. Don't assume what `cfg` holds.
+- **`cfg` is an overloaded name.** It carries per-run options, but may also contain infrastructure fields like `app_config`, `thread_id`, or `run_id`. Don't assume what `cfg` holds.
 - **`config` is mutated in place.** The factory writes `metadata` and `callbacks` into it — don't treat it as read-only.
 - **Bootstrap vs. custom agent is easy to mix up.** `setup_agent` shows up only in the bootstrap flow; `update_agent` only when chatting with an existing custom agent. Pick the wrong one and you call the wrong tool.
-- **Middleware order is assembled elsewhere, yet it's part of the final behavior.** Touch this line and you may quietly change runtime semantics. The middleware chapter will come back to that bill.
+- **Middleware order is assembled elsewhere, yet it's part of the final behavior.** Touch this line and you may quietly change runtime semantics. The middleware chapter returns to that risk.
 
 ---
 

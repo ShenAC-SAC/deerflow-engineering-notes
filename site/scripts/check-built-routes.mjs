@@ -41,7 +41,7 @@ const enStop = readBuilt('en/journey/1');
 
 mustInclude('/', rootHtml, '<html lang="en">', '根路径必须默认英文');
 mustInclude('/', rootHtml, '<title>DeerFlow Engineering Notes</title>', '英文首页标题');
-mustInclude('/', rootHtml, 'From prompt to agent run', '英文首页主标题');
+mustInclude('/', rootHtml, 'From a prompt to an agent run', '英文首页主标题');
 mustInclude('/', rootHtml, `href="${href('/zh/')}"`, '英文首页应可切换到中文首页');
 mustInclude('/', rootHtml, 'EN → ZH', '英文首页切换标签');
 mustExclude('/', rootHtml, 'Redirecting to:', '根路径不能再是静态 redirect 页');

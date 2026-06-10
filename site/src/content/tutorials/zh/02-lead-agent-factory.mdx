@@ -2,7 +2,7 @@
 lang: zh
 slug: 02-lead-agent-factory
 station: 2
-title: lead-agent 工厂 · 装配线不是大脑
+title: lead-agent 工厂 · 装配线不负责思考
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
@@ -16,7 +16,7 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 上一章里，用户输入已经被 Gateway 登记成一次 run。现在它进入 `make_lead_agent()`：这一章看 DeerFlow 如何把「运行时选项 + 应用配置」装配成一张可运行的 LangGraph agent 图。
 
-先记住一件事，后面所有细节都挂在它上面：**这里是装配线，不是大脑。** 真正的「思考」发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去。它装完就退场，连图都不亲自执行。
+先记住一件事，后面所有细节都挂在它上面：**这里是装配线，不负责思考。** 真正的推理发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去。它装完就退场，连图都不亲自执行。
 
 <FlowDiagram
   caption="一次 run 怎么走到一张编译好的 agent 图"
@@ -31,13 +31,13 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 ## 一个函数，两个名字
 
-打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />，你会看到一对长得很像的函数：`make_lead_agent()` 和 `_make_lead_agent()`。不要被那个下划线骗了——它划出了整篇最重要的一条边界。
+打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />，你会看到一对长得很像的函数：`make_lead_agent()` 和 `_make_lead_agent()`。那个下划线不是装饰，它划出了整篇最重要的一条边界。
 
 **`make_lead_agent(config)`** 只收一个参数，因为 LangGraph Server 要求图工厂必须能「只凭一个 config」被调起（见 <SourceRef file="backend/langgraph.json" sha="0fb18e36" />）。它干的活很轻：解析出 `AppConfig`（优先用运行时注入的，回退到 `get_app_config()`），然后把活转交给下划线版本。它是**兼容适配器**。
 
 **`_make_lead_agent(config, *, app_config)`** 才是真正的装配函数。那个 `*` 把 `app_config` 设成只能按关键字传——因为两个参数语义上都像 config，位置传参太容易搞混。它做的是确定性的事：从运行时选项 + 应用配置，一步步把图组装出来。
 
-<MarginNote>下划线在 Python 里没有任何强制力，纯靠君子协定。但这里它扛起了真正的语义：外面那个管兼容，里面那个管干活。</MarginNote>
+<MarginNote>下划线在 Python 里没有任何强制力，只是一种约定。但这里它确实有语义：外层函数处理兼容，内层函数负责装配。</MarginNote>
 
 ## 运行选项是怎么拼出来的
 

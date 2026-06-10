@@ -29,7 +29,7 @@ pnpm check         # check:content && check:refs && build(提交前跑这个)
 
 ```
 src/
-  data/journey.ts                 旅程地图(单一真相源)
+  data/journey.ts                 旅程地图(单一数据源)
   content.config.ts               深读集合 + zod schema(校验牙齿)
   content/tutorials/{zh,en}/*.mdx  双语深读正文
   components/                     RiskMeter / StationCard / JourneyIndex
@@ -67,4 +67,4 @@ scripts/check-source-refs.mjs     锚定校验脚本
 - 中英**统一笔调、风趣一点点**,纯文字 + 可视化,无音频。
 - **工程设计哲学是一等公民**:用 `<Philosophy>` / `<Tradeoff>` 显式承载「为什么这么设计」。
 - 源码指针**钉 SHA、锚定不变量**;改源码后用 `pnpm check:refs` 复核。
-- `site/src/data/journey.ts` 是旅程地图的单一真相源;已发布站点必须同时有 zh/en 深读。
+- `site/src/data/journey.ts` 是旅程地图的单一数据源;已发布站点必须同时有 zh/en 深读。

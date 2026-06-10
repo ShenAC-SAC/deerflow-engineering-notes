@@ -1,4 +1,4 @@
-// 旅程地图(单一真相源):8 站的卡片元数据,双语。
+// 旅程地图(单一数据源):8 站的卡片元数据,双语。
 // 深读正文走 MDX(src/content/tutorials/<lang>/<slug>.mdx),只有 status:'published' 的站才有。
 // 这样「地图」是数据、「深读」是内容,各自演化、互不绑架。
 
@@ -13,7 +13,7 @@ export interface Station {
   altitude: Altitude;       // 抽象高度
   status: Status;
   title: Record<Lang, string>;
-  mentalModel: Record<Lang, string>;   // 一句话心智模型(卡片主载荷)
+  mentalModel: Record<Lang, string>;   // 一句话心智模型(卡片核心信息)
   teaser: Record<Lang, string>;        // 一句编辑式「快讯」,与心智模型互补
 }
 
@@ -30,7 +30,7 @@ export const JOURNEY: Station[] = [
   {
     station: 2, slug: '02-lead-agent-factory', risk: 3, altitude: '架构', status: 'published',
     title: { zh: 'lead-agent 工厂', en: 'Lead-agent factory' },
-    mentalModel: { zh: '装配线，不是大脑', en: 'Assembly line, not a mind' },
+    mentalModel: { zh: '装配线，不负责思考', en: 'Assembly line, not the brain' },
     teaser: {
       zh: '图工厂不负责推理。它把模型、工具、中间件、prompt 和状态结构装配成一张能运行的图。',
       en: 'The graph factory does not reason; it assembles model, tools, middleware, prompt, and state schema into a runnable graph.',
@@ -39,7 +39,7 @@ export const JOURNEY: Station[] = [
   {
     station: 3, slug: '03-tools-assembly', risk: 4, altitude: '架构', status: 'published',
     title: { zh: '工具装配', en: 'Tool assembly' },
-    mentalModel: { zh: 'list[BaseTool] 不该是唯一真相源', en: 'The tool list is not the truth' },
+    mentalModel: { zh: 'list[BaseTool] 不是最终答案', en: 'The tool list is not the source of truth' },
     teaser: {
       zh: '工具列表不是静态注册表。一次 run 能看见哪些工具，取决于配置、模型能力、沙箱、skill 和 MCP 策略。',
       en: 'A run sees tools through config, model capability, sandbox rules, skills, and MCP policy, not through a static registry.',
@@ -59,8 +59,8 @@ export const JOURNEY: Station[] = [
     title: { zh: '沙箱系统', en: 'Sandbox system' },
     mentalModel: { zh: '能力边界，不只是文件系统', en: 'A capability boundary, not a filesystem' },
     teaser: {
-      zh: '沙箱不是文件系统包装，而是一道能力边界：它决定 agent 能碰到现实世界的哪一角。',
-      en: 'The sandbox is not a filesystem wrapper. It defines which part of the outside world an agent may touch.',
+      zh: '沙箱不是文件系统包装，而是一道能力边界：它决定 agent 能访问哪些外部资源。',
+      en: 'The sandbox is not a filesystem wrapper. It defines which external resources an agent may access.',
     },
   },
   {

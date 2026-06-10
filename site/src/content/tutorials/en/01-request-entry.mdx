@@ -48,7 +48,7 @@ DeerFlow Gateway  = the current primary HTTP runtime, LangGraph-API compatible
 
 `backend/langgraph.json` still registers `lead_agent`, which keeps the official LangGraph Server, Studio, and CLI path working. But **on the main path, the Gateway imports and calls the graph factory directly**. There is no official server in between. The usual product path is DeerFlow's own Gateway runtime, not LangGraph Server.
 
-<MarginNote>One line to keep them straight: LangGraph runs the graph; the Gateway turns a request into an observable, rollback-able, billable run. Kernel vs. host.</MarginNote>
+<MarginNote>One line to keep them straight: LangGraph runs the graph; the Gateway turns a request into an observable, cancellable, rollback-ready run. Kernel vs. host.</MarginNote>
 
 ## The four parts that land a request
 
@@ -56,11 +56,11 @@ Open <SourceRef file="backend/app/gateway/routers/thread_runs.py" sha="0fb18e36"
 
 **`RunCreateRequest`** — the shape of a run request. It carries `input`, `config`, `context`, `metadata`, `stream_mode`, plus control bits like `interrupt_before / interrupt_after`, `multitask_strategy`, and `on_disconnect`. It is the caller's declaration of "how this run should run."
 
-**`RunManager`** — the registry office for runs. `create_or_reject()` decides whether to file this run at all (e.g. the same thread is already running, so reject per `multitask_strategy`), then handles `set_status` / `cancel` / persisting run metadata.
+**`RunManager`** — the run registry. `create_or_reject()` decides whether to create this run at all (for example, the same thread is already running, so the request may be rejected according to `multitask_strategy`), then handles `set_status`, `cancel`, and run metadata persistence.
 
 **`StreamBridge`** — a decoupling point. The background graph produces events; the HTTP side consumes them; the two do not call each other directly. `run_agent()` publishes into the bridge, and `sse_consumer()` reads from it and formats SSE events. If the frontend disconnects, the backend does not collapse with it.
 
-**`run_agent()`** — the background worker that actually does the work (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="0fb18e36" />). Note the boundary: **it is not the agent. It is the worker that holds the graph while it runs.**
+**`run_agent()`** — the background worker that actually does the work (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="0fb18e36" />). Note the boundary: **it is not the agent. It is the worker that drives graph execution.**
 
 ## `configurable`, or `context`?
 
@@ -107,7 +107,7 @@ The cost is a layer of compatibility glue: request fields must be translated int
 - **`configurable` and `context` are historical compatibility debt.** A field written to only one side may read empty for old code or for newer `ToolRuntime.context` consumers. Adding a field? First decide which whitelist it belongs to and whether it needs the dual-write.
 - **`run_agent()` is an orchestration-heavy function.** It mixes graph invocation, persistence, stream publishing, rollback, tracing, and cleanup — powerful, but dense. Know which part you're touching before you touch it.
 - **It runs as a background task.** Disconnect, cancellation, rollback, and final checkpoint serialization all need care, or you may return "half-finished state" as success.
-- **It doesn't mutate `ThreadState` directly.** Run records, thread metadata, and stream events are written by the Gateway; the agent's graph state is written by graph execution. When state changes, first sort out whose hand moved it.
+- **It doesn't mutate `ThreadState` directly.** Run records, thread metadata, and stream events are written by the Gateway; the agent's graph state is written by graph execution. When state changes, first identify which layer wrote it.
 
 ---
 

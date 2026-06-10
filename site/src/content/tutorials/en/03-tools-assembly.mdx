@@ -2,7 +2,7 @@
 lang: en
 slug: 03-tools-assembly
 station: 3
-title: Tool assembly · the tool list is not the truth
+title: Tool assembly · the tool list is not the source of truth
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/tools/tools.py
@@ -18,7 +18,7 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 Most readers meet the tools module and think: "this is where functions get registered." That is only half true. Its real shape appears the day a tool you clearly configured **does not appear in front of the model**, and you finally ask the useful question: who decides whether a tool is visible?
 
-Hold onto this: **this stop is not a function registry; it is a capability snapshot for one run.** Which tools come from config, which are built in, which get added, removed, or *deferred* because of the model, the sandbox, a skill, MCP, or subagent policy - only after that policy pass do you get the final list handed to `create_agent(..., tools=...)`.
+Hold onto this: **this stop is not a function registry; it is a visibility calculation for one run.** Config, built-ins, model capability, sandbox rules, skills, MCP, and subagent policy all decide which tools are added, removed, or *deferred*. Only after that policy pass do you get the final list handed to `create_agent(..., tools=...)`.
 
 <FlowDiagram
   caption="From tool sources to what this run is allowed to see: a two-stage assembly"
@@ -39,7 +39,7 @@ The main entry is `get_available_tools()` in <SourceRef file="backend/packages/h
 
 ```text
 Given system config, built-ins, and runtime switches,
-which tools can this agent candidate "obtain"?
+which tools can this agent candidate acquire?
 ```
 
 The flow is roughly: start from `AppConfig.tools` → filter by a custom agent's `tool_groups` → drop host bash if it is not allowed → dynamically import via `resolve_variable(cfg.use, BaseTool)` → add built-ins → add `task_tool` by switch and `view_image_tool` by model capability → attach MCP / ACP → and finally **dedupe by `tool.name`**.
@@ -83,7 +83,7 @@ Routing looks at `BaseTool.name`, which need not equal the `name` written in `co
 
 The second trap in reading the tools module is assuming every tool is "just a function call." DeerFlow tools come in at least four shapes — recognize them and several later stops get easier:
 
-- **Plain execution tool** — a `BaseTool` made by `@tool`; the model emits a `tool_call`, ToolNode runs the function. `read_file`, `web_search`, `bash`.
+- **Plain execution tool** — a `BaseTool` made by `@tool`; the model emits a `tool_call`, and ToolNode runs the function. `read_file`, `web_search`, and `bash` are examples.
 - **State-updating tool** — `present_files` doesn't just return text; it returns a LangGraph `Command(update={"artifacts": ...})` that **writes graph state directly**, and the frontend renders the artifacts from there.
 - **Control-flow tool** — `ask_clarification`'s function body is only a placeholder; the real behavior is in `ClarificationMiddleware`, which intercepts the call and uses `Command(..., goto=END)` to halt the run until the user's next message. **Model user input as an interrupt, not as a tool blocking on a human.**
 - **Delegation tool** — `task` is the subagent entry: it inherits the parent's sandbox/model/tool policy, builds the child toolset with `subagent_enabled=False` (so `task` isn't recursively exposed), runs a `SubagentExecutor` in the background, and returns the result as a tool result.
@@ -92,7 +92,7 @@ The second trap in reading the tools module is assuming every tool is "just a fu
 
 ## The tool exists; its schema may not be exposed
 
-MCP tools are the clearest proof that the list is not the whole truth. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once. The prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
+MCP tools are the clearest proof that the list is not the final answer. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once. The prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
 
 ```text
 A single MCP server can expose dozens of tools.
@@ -143,7 +143,7 @@ One level up: **tool visibility is the result of a policy computation, not a sta
 - **`config name` is not `tool.name`.** Routing uses `BaseTool.name`. When they diverge, the name the model sees and the name the runtime routes by drift apart.
 - **host bash is a security boundary, not a toggle.** Declared doesn't mean allowed — it must pass `is_host_bash_allowed(config)`.
 - **MCP has its own freshness path.** `get_available_tools()` receives `app_config`, yet MCP extensions are re-read from disk (by mtime) to avoid a stale config across processes.
-- **"Visible" is not "executable."** A deferred MCP tool is still held and runnable by ToolNode; only its schema is withheld from the model — call it unpromoted and middleware bounces it.
+- **"Visible" is not "executable."** A deferred MCP tool is still held by ToolNode and can run after promotion; only its schema is withheld from the model. Call it before promotion and middleware rejects the call.
 - **Dedupe has priority.** The order is config → built-ins → MCP → ACP, and on a name clash **the earlier one wins**. Because routing is by name, duplicates make the schema ambiguous.
 
 ---
