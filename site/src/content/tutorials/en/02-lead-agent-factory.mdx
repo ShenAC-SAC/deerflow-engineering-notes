@@ -2,7 +2,7 @@
 lang: en
 slug: 02-lead-agent-factory
 station: 2
-title: The lead-agent factory · an assembly line, not a brain
+title: Lead-agent factory · assembly line, not a mind
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
@@ -14,9 +14,9 @@ import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 
-Your one sentence has already crossed the frontend, walked through the Gateway, and become a run. Now it knocks on the door of `make_lead_agent()`. This stop is about how that door assembles "runtime options + application config" into a runnable LangGraph agent graph.
+Your prompt has crossed the frontend, passed through the Gateway, and become a run. Now it reaches `make_lead_agent()`. This stop is about how runtime options plus application config become a runnable LangGraph agent graph.
 
-Hold onto one idea — every detail below hangs off it: **this is an assembly line, not a brain.** The real "thinking" happens later, in the model, the tools, and the middleware. This function only bolts the parts together correctly and hands the graph off. It doesn't even run the graph itself.
+Hold onto one idea: **this is an assembly line, not a mind.** The reasoning happens later, inside the model-tool-middleware loop. This function only bolts the parts together and hands off the compiled graph. It does not even run the graph itself.
 
 <FlowDiagram
   caption="How a run reaches a compiled agent graph"
@@ -29,15 +29,15 @@ Hold onto one idea — every detail below hangs off it: **this is an assembly li
   CA --> G["compiled LangGraph agent graph"]`}
 />
 
-## One function, two names
+## One factory, two entry points
 
 Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. Don't roll your eyes at that underscore — it draws the most important boundary in the whole file.
 
-**`make_lead_agent(config)`** takes a single argument, because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="0fb18e36" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
+**`make_lead_agent(config)`** takes a single argument because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="0fb18e36" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
 
 **`_make_lead_agent(config, *, app_config)`** is the real assembly function. That `*` makes `app_config` keyword-only — because both arguments are "config-like," and positional calls are too easy to confuse. Its work is deterministic: build the graph, step by step, from runtime options plus application config.
 
-<MarginNote>The underscore enforces nothing in Python — it's a gentleman's agreement. But here it carries real meaning: the outer one handles compatibility, the inner one does the work.</MarginNote>
+<MarginNote>The underscore enforces nothing in Python. Here it still carries real meaning: the outer function handles compatibility, and the inner function does the work.</MarginNote>
 
 ## How the runtime options get assembled
 
@@ -66,7 +66,7 @@ request model_name
   > AppConfig.models[0]
 ```
 
-If `thinking_enabled=True` but the selected model doesn't support thinking, the factory logs a warning and quietly turns `thinking_enabled` back off. You can overthink all you want; the model still has to agree.
+If `thinking_enabled=True` but the selected model does not support thinking, the factory logs a warning and turns `thinking_enabled` back off. You can ask for thinking; the model still has to support it.
 
 ## The final formula
 
@@ -88,7 +88,7 @@ The mental model, in one line:
 Lead Agent graph = model + tools + middleware + system_prompt + ThreadState
 ```
 
-`create_agent()` provides the standard model-and-tool loop; DeerFlow only supplies the **materials** (model, tools) and the **policies** (middleware, prompt, state schema).
+`create_agent()` provides the standard model-and-tool loop. DeerFlow supplies the **materials** (model, tools) and the **policies** (middleware, prompt, state schema).
 
 <Philosophy title="Design rationale">
 
@@ -126,4 +126,4 @@ The real lesson: **keep compatibility boundaries explicit, and keep them in one 
 
 ---
 
-That's the assembly line. Its entire virtue is being **boring**: deterministic, predictable, opinion-free. Before taking apart middleware, the next stop looks at how the tool list is filtered, because what the model can call decides what this graph can actually do.
+That is the assembly line. Its virtue is being **boring**: deterministic, predictable, and light on hidden opinions. Before we take apart middleware, the next stop looks at tool assembly, because what the model can call decides what this graph can actually do.

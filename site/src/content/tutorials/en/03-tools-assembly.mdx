@@ -2,7 +2,7 @@
 lang: en
 slug: 03-tools-assembly
 station: 3
-title: Tools assembly · list[BaseTool] is not the only source of truth
+title: Tool assembly · the tool list is not the truth
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/tools/tools.py
@@ -16,12 +16,12 @@ import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 
-Almost everyone reads the tools module, the first time, as "this is where a bunch of functions get registered." That's half-right at best. Its real shape only shows up the day a tool you clearly configured **fails to appear in front of the model** — and you finally ask the right question: who actually decides whether a tool is visible?
+Most readers meet the tools module and think: "this is where functions get registered." That is only half true. Its real shape appears the day a tool you clearly configured **does not appear in front of the model**, and you finally ask the useful question: who decides whether a tool is visible?
 
-Hold onto this; everything hangs off it: **this stop is not a function registry — it's a capability snapshot for one run.** Which tools come from config, which are built in, which get added, removed, or *deferred* because of the model, the sandbox, a skill, MCP, or the subagent policy — only after all of that do you get the final list handed to `create_agent(..., tools=...)`.
+Hold onto this: **this stop is not a function registry; it is a capability snapshot for one run.** Which tools come from config, which are built in, which get added, removed, or *deferred* because of the model, the sandbox, a skill, MCP, or subagent policy - only after that policy pass do you get the final list handed to `create_agent(..., tools=...)`.
 
 <FlowDiagram
-  caption="From 'tool sources' to 'what this run is actually allowed to see' — a two-stage assembly"
+  caption="From tool sources to what this run is allowed to see: a two-stage assembly"
   chart={`flowchart TD
   SRC["config.yaml · built-ins · MCP · ACP"] --> GA["get_available_tools()"]
   GA --> G1["tool_groups filter"]
@@ -35,16 +35,16 @@ Hold onto this; everything hangs off it: **this stop is not a function registry 
 
 ## A candidate set, not the final set
 
-The main entry is `get_available_tools()` in <SourceRef file="backend/packages/harness/deerflow/tools/tools.py" sha="0fb18e36" />. But note: **what it produces is not the final tool list — it's a candidate set.** It answers a deliberately limited question:
+The main entry is `get_available_tools()` in <SourceRef file="backend/packages/harness/deerflow/tools/tools.py" sha="0fb18e36" />. But note the boundary: **what it produces is not the final tool list. It is a candidate set.** It answers a deliberately limited question:
 
 ```text
 Given system config, built-ins, and runtime switches,
 which tools can this agent candidate "obtain"?
 ```
 
-It roughly goes: start from `AppConfig.tools` → filter by a custom agent's `tool_groups` → drop host bash if it isn't allowed → dynamically import via `resolve_variable(cfg.use, BaseTool)` → add built-ins → add `task_tool` by switch and `view_image_tool` by model capability → attach MCP / ACP → and finally **dedupe by `tool.name`**.
+The flow is roughly: start from `AppConfig.tools` → filter by a custom agent's `tool_groups` → drop host bash if it is not allowed → dynamically import via `resolve_variable(cfg.use, BaseTool)` → add built-ins → add `task_tool` by switch and `view_image_tool` by model capability → attach MCP / ACP → and finally **dedupe by `tool.name`**.
 
-Then, back in `_make_lead_agent()` (<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />), the candidate set passes through two more gates: the skill-level `allowed_tools` filter, and the MCP deferred-tool assembly. So "what can be seen" is **two-stage** — gather candidates first, then apply policy.
+Then, back in `_make_lead_agent()` (<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />), the candidate set passes through two more gates: the skill-level `allowed_tools` filter and the MCP deferred-tool assembly. Visibility is **two-stage**: gather candidates, then apply policy.
 
 ## Config is not the tool itself
 
@@ -57,9 +57,9 @@ tools:
     use: deerflow.sandbox.tools:read_file_tool
 ```
 
-That `use` isn't Python syntax — it's a DeerFlow convention: `module.path:variable_name`. `resolve_variable()` hands the part before the colon to `import_module()`, pulls the variable after the colon off that module, and checks it really is a `BaseTool` instance.
+That `use` field is not Python syntax. It is a DeerFlow convention: `module.path:variable_name`. `resolve_variable()` hands the part before the colon to `import_module()`, pulls the variable after the colon from that module, and checks that it really is a `BaseTool` instance.
 
-This produces a **key distinction** worth burning into memory — it'll save you half a day of debugging:
+This produces a **key distinction** worth remembering:
 
 ```text
 the name in config  =  a label for humans reading config
@@ -68,11 +68,11 @@ tool.name           =  the name actually exposed to the model and used for routi
 
 Routing looks at `BaseTool.name`, which need not equal the `name` written in `config.yaml`. The moment they diverge, the model sees one schema name while the runtime routes by another — and DeerFlow logs a warning about exactly that.
 
-<MarginNote>Dynamic import is flexible; the price is that it fails late. A wrong module path, a wrong variable name, a missing optional dependency, or a variable that isn't a BaseTool — all blow up only at runtime resolution.</MarginNote>
+<MarginNote>Dynamic import is flexible; the price is late failure. A wrong module path, a wrong variable name, a missing optional dependency, or a variable that is not a BaseTool all fail at runtime resolution.</MarginNote>
 
 ## Visibility is several gates, not one whitelist
 
-"Why is the tool missing" is hard to chase precisely because it crosses several gates, each with its key in a different file:
+"Why is this tool missing?" is hard to chase because visibility crosses several gates, each with its key in a different file:
 
 - **`tool_groups`** — a custom agent's coarse whitelist. Set it, and only tools in those groups survive.
 - **host bash safety gate** — even if `config.yaml` declares `bash`, it must pass `is_host_bash_allowed(config)` first; if not, it's dropped. This is a **security boundary**, not an ordinary toggle.
@@ -85,14 +85,14 @@ The second trap in reading the tools module is assuming every tool is "just a fu
 
 - **Plain execution tool** — a `BaseTool` made by `@tool`; the model emits a `tool_call`, ToolNode runs the function. `read_file`, `web_search`, `bash`.
 - **State-updating tool** — `present_files` doesn't just return text; it returns a LangGraph `Command(update={"artifacts": ...})` that **writes graph state directly**, and the frontend renders the artifacts from there.
-- **Control-flow tool** — `ask_clarification`'s function body is only a placeholder; the real behavior is in `ClarificationMiddleware`, which intercepts the call and `Command(..., goto=END)` halts the run to wait for the user's next message. **Model user input as an interrupt, not a tool blocking on a human.**
+- **Control-flow tool** — `ask_clarification`'s function body is only a placeholder; the real behavior is in `ClarificationMiddleware`, which intercepts the call and uses `Command(..., goto=END)` to halt the run until the user's next message. **Model user input as an interrupt, not as a tool blocking on a human.**
 - **Delegation tool** — `task` is the subagent entry: it inherits the parent's sandbox/model/tool policy, builds the child toolset with `subagent_enabled=False` (so `task` isn't recursively exposed), runs a `SubagentExecutor` in the background, and returns the result as a tool result.
 
 <MarginNote>Notice this 2.x design smell: whether a parent agent "can delegate" shows up as whether task_tool is in the list. Capability is coupled to list mutation — the subagent stop comes back to pull that apart.</MarginNote>
 
 ## The tool exists; its schema may not be exposed
 
-MCP tools are the clearest proof that the list isn't the only source of truth. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once — the prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
+MCP tools are the clearest proof that the list is not the whole truth. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once. The prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
 
 ```text
 A single MCP server can expose dozens of tools.
@@ -148,4 +148,4 @@ One level up: **tool visibility is the result of a policy computation, not a sta
 
 ---
 
-The tools-assembly stop always answers "which tools is this run **allowed to see / call**," never "how a given tool **runs**." Keep those two apart and you're holding the thread for the whole tool system. But once the tools are gathered and the graph is assembled, the next variable that actually decides behavior surfaces: **the order of the middleware.** Next stop, we watch middleware order turn straight into runtime semantics.
+The tool-assembly stop answers "which tools is this run **allowed to see or call**," not "how a given tool **runs**." Keep those questions apart and the whole tool system becomes easier to follow. Once the tools are gathered and the graph is assembled, the next behavior-setting variable appears: **middleware order.** Next stop, we watch order turn into runtime semantics.

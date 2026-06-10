@@ -25,10 +25,14 @@ const num = String(station).padStart(2, '0');
 const t = lang === 'zh'
   ? { back: '← 返回主线', refs: '源码锚点', frame: `第 ${num} 站 · 已发布`, mm: '心智模型', next: '下一站', prev: '上一站' }
   : { back: '← the journey', refs: 'source anchors', frame: `stop ${num} · published`, mm: 'Mental model', next: 'next stop', prev: 'prev stop' };
+const homePath = link(lang === 'zh' ? '/zh/' : '/');
+const altitudeLabel = lang === 'zh'
+  ? meta.altitude
+  : ({ '实现': 'implementation', '架构': 'architecture', '哲学': 'philosophy' } as Record<string, string>)[meta.altitude] || meta.altitude;
 ---
 <BaseLayout title={`${meta.title[lang]} · DeerFlow`} lang={lang}>
   <article class="tut wrap">
-    <a class="tut-back" href={link(`/${lang}/`)}>{t.back}</a>
+    <a class="tut-back" href={homePath}>{t.back}</a>
 
     <header class="tut-head">
       <div class="tut-badge">{num}</div>
@@ -36,7 +40,7 @@ const t = lang === 'zh'
         <p class="tut-frame eyebrow">{t.frame}</p>
         <h1 class="tut-title">{meta.title[lang]}</h1>
         <div class="tut-meta">
-          <span class="tut-alt">{meta.altitude}</span>
+          <span class="tut-alt">{altitudeLabel}</span>
           <RiskMeter value={meta.risk} lang={lang} />
         </div>
       </div>

@@ -12,7 +12,7 @@
     "astro": "astro",
     "check:refs": "node scripts/check-source-refs.mjs",
     "check:content": "node scripts/check-content.mjs",
-    "check": "node scripts/check-content.mjs && node scripts/check-source-refs.mjs && astro build"
+    "check": "node scripts/check-content.mjs && node scripts/check-source-refs.mjs && astro build && node scripts/check-built-routes.mjs"
   },
   "dependencies": {
     "@astrojs/mdx": "^6.0.3",

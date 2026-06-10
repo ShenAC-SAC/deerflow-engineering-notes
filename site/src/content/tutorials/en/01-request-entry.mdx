@@ -2,7 +2,7 @@
 lang: en
 slug: 01-request-entry
 station: 1
-title: Request entry · how one sentence becomes a run
+title: Request entry · how a prompt becomes a run
 sha: 0fb18e36
 sourceRefs:
   - backend/app/gateway/routers/thread_runs.py
@@ -15,12 +15,12 @@ import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 
-Every agent system has to answer an unglamorous question before it gets to be clever: who catches the request? The sentence you type in the frontend has to first become a **run** — something with an identity, a lifecycle, and a stream you can watch — before the model gets to say a word. This stop is about how DeerFlow catches that sentence, files it as a run, installs the runtime context, and streams events back to you as they happen.
+Every agent system has an unglamorous job before it gets to be clever: turn user input into a **run**. A prompt from the frontend needs an identity, a lifecycle, runtime context, and an event stream before the model says anything. This stop follows the DeerFlow Gateway as it accepts that prompt, records it as a run, installs context, and streams execution events back as they happen.
 
-Hold onto one idea; everything else hangs off it: **DeerFlow has to be a runtime before it can be an agent.** The Gateway is that runtime host — it owns intake, the life and death of a run, the context it installs, the events it streams out, and knowing when the whole thing is done. The actual "thinking" doesn't start until the next stop.
+Keep one idea in view: **DeerFlow has to be a runtime before it can be an agent.** The Gateway is that runtime host. It owns intake, run status, cancellation, context injection, streaming, and completion. The actual reasoning starts later.
 
 <FlowDiagram
-  caption="One sentence in — how it becomes a run that executes in the background and streams to the front"
+  caption="One prompt in: how it becomes a background run with a live stream"
   chart={`flowchart TD
   U["Frontend / IM / LangGraph SDK"] --> EP["POST /threads/{id}/runs/stream"]
   EP --> SR["stream_run() · start_run()"]
@@ -36,9 +36,9 @@ Hold onto one idea; everything else hangs off it: **DeerFlow has to be a runtime
   SB --> SSE`}
 />
 
-## Two "runtimes," don't conflate them
+## Three runtime names, three different jobs
 
-The easiest trap here is collapsing three different things into one:
+The easiest trap here is collapsing these names into one idea:
 
 ```text
 LangGraph         = the execution kernel agents use (how a graph runs)
@@ -46,7 +46,7 @@ LangGraph Server  = the optional official HTTP runtime
 DeerFlow Gateway  = the current primary HTTP runtime, LangGraph-API compatible
 ```
 
-`backend/langgraph.json` still registers `lead_agent` — that keeps the official LangGraph Server / Studio / CLI working. But **on the main path, the Gateway imports and calls the graph factory directly**, no official server in between. So the path you actually run in production is the Gateway's own runtime, not LangGraph Server.
+`backend/langgraph.json` still registers `lead_agent`, which keeps the official LangGraph Server, Studio, and CLI path working. But **on the main path, the Gateway imports and calls the graph factory directly**. There is no official server in between. The usual product path is DeerFlow's own Gateway runtime, not LangGraph Server.
 
 <MarginNote>One line to keep them straight: LangGraph runs the graph; the Gateway turns a request into an observable, rollback-able, billable run. Kernel vs. host.</MarginNote>
 
@@ -54,13 +54,13 @@ DeerFlow Gateway  = the current primary HTTP runtime, LangGraph-API compatible
 
 Open <SourceRef file="backend/app/gateway/routers/thread_runs.py" sha="0fb18e36" /> and <SourceRef file="backend/app/gateway/services.py" sha="0fb18e36" /> and you'll keep meeting four roles. Don't memorize the fields — remember which question each one answers.
 
-**`RunCreateRequest`** — what a request looks like. It carries `input`, `config`, `context`, `metadata`, `stream_mode`, plus control bits like `interrupt_before / interrupt_after`, `multitask_strategy`, and `on_disconnect`. It's the full declaration of "how this run wants to run."
+**`RunCreateRequest`** — the shape of a run request. It carries `input`, `config`, `context`, `metadata`, `stream_mode`, plus control bits like `interrupt_before / interrupt_after`, `multitask_strategy`, and `on_disconnect`. It is the caller's declaration of "how this run should run."
 
 **`RunManager`** — the registry office for runs. `create_or_reject()` decides whether to file this run at all (e.g. the same thread is already running, so reject per `multitask_strategy`), then handles `set_status` / `cancel` / persisting run metadata.
 
-**`StreamBridge`** — a decoupling gate. The background graph produces events; the HTTP side consumes them; the two never hold hands directly. `run_agent()` publishes into the bridge, `sse_consumer()` reads from it and formats SSE events. If the frontend disconnects, the back doesn't collapse with it.
+**`StreamBridge`** — a decoupling point. The background graph produces events; the HTTP side consumes them; the two do not call each other directly. `run_agent()` publishes into the bridge, and `sse_consumer()` reads from it and formats SSE events. If the frontend disconnects, the backend does not collapse with it.
 
-**`run_agent()`** — the background worker that actually does the work (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="0fb18e36" />). Note carefully: **it is not the agent. It's the hand that holds the agent while it runs.**
+**`run_agent()`** — the background worker that actually does the work (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="0fb18e36" />). Note the boundary: **it is not the agent. It is the worker that holds the graph while it runs.**
 
 ## `configurable`, or `context`?
 
@@ -71,7 +71,7 @@ config["configurable"]   the older runtime-options channel
 config["context"]        the newer LangGraph runtime-context channel
 ```
 
-In compatibility mode, DeerFlow writes the key fields into **both** — whitelisted fields like `model_name`, `mode`, `thinking_enabled`, `reasoning_effort`, `is_plan_mode`, `subagent_enabled`, `agent_name`, `is_bootstrap` each get a copy in either channel. Why the apparent waste? Because older DeerFlow code reads from `configurable` and newer `ToolRuntime.context` reads from `context`; write only one side and a whole class of consumers comes up empty.
+In compatibility mode, DeerFlow writes key fields into **both** channels. Whitelisted fields like `model_name`, `mode`, `thinking_enabled`, `reasoning_effort`, `is_plan_mode`, `subagent_enabled`, `agent_name`, and `is_bootstrap` get copied across. Why the apparent waste? Older DeerFlow code reads from `configurable`; newer `ToolRuntime.context` consumers read from `context`. Write only one side and a whole class of consumers sees nothing.
 
 Then `run_agent()` builds a LangGraph `Runtime`, packs run-scoped data (`thread_id / run_id / user_id / app_config`) into `runtime.context`, and tucks it back into `config["configurable"]["__pregel_runtime"]` so downstream middleware and tools can all reach it through LangGraph's runtime API.
 
@@ -111,4 +111,4 @@ The cost is a layer of compatibility glue: request fields must be translated int
 
 ---
 
-The entry's whole job is to turn "user input" into "a graph that's running," stream it back, and then step into the wings. It caught the request, filed it, and installed the context — and next, a door knocks on `make_lead_agent()`, where the request stops being data for the first time and gets assembled into a runnable graph. See you at the next stop.
+The entry layer turns user input into a running graph, streams it back, and then gets out of the way. It has caught the request, filed the run, and installed context. Next, the run reaches `make_lead_agent()`, where the request stops being intake data and becomes a runnable graph.

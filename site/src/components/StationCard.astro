@@ -21,6 +21,9 @@ const num = String(station).padStart(2, '0');
 const t = lang === 'zh'
   ? { planned: '计划中', open: '阅读本篇' }
   : { planned: 'planned', open: 'read this stop' };
+const altitudeLabel = lang === 'zh'
+  ? altitude
+  : ({ '实现': 'implementation', '架构': 'architecture', '哲学': 'philosophy' } as Record<string, string>)[altitude] || altitude;
 ---
 <Tag class:list={['station-card', { locked }]} href={locked ? undefined : href}>
   <span class="st-badge">{num}</span>
@@ -33,7 +36,7 @@ const t = lang === 'zh'
         <span class="st-planned">□ {t.planned}</span>
       ) : (
         <Fragment>
-          <span class="st-alt">{altitude}</span>
+          <span class="st-alt">{altitudeLabel}</span>
           <RiskMeter value={risk} lang={lang} />
           <span class="st-open">{t.open} →</span>
         </Fragment>

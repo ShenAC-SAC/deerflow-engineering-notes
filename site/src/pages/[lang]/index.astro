@@ -7,7 +7,7 @@ export function getStaticPaths() {
 }
 
 const lang = Astro.params.lang as 'zh' | 'en';
-const title = lang === 'zh' ? 'DeerFlow 源码之旅' : 'DeerFlow Source Journey';
+const title = lang === 'zh' ? 'DeerFlow 源码之旅' : 'DeerFlow Engineering Notes';
 ---
 <BaseLayout title={title} lang={lang}>
   <JourneyIndex lang={lang} />

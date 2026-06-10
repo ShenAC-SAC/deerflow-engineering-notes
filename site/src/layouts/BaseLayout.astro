@@ -7,11 +7,32 @@ interface Props {
   lang?: 'zh' | 'en';
   description?: string;
 }
-const { title, lang = 'zh', description = 'DeerFlow 源码阅读 · 可视化工程博客' } = Astro.props;
+const {
+  title,
+  lang = 'en',
+  description = lang === 'zh'
+    ? 'DeerFlow 源码阅读 · 可视化工程博客'
+    : 'DeerFlow source-reading notes for understanding the Python agent runtime',
+} = Astro.props;
 
 const other = lang === 'zh' ? 'en' : 'zh';
-const altPath = link(stripBase(Astro.url.pathname).replace(/^\/(zh|en)/, `/${other}`));
+const pathname = stripBase(Astro.url.pathname) || '/';
+const toEnglishPath = (path: string): string => {
+  if (path === '/' || path === '/zh' || path === '/zh/') return '/';
+  if (path.startsWith('/zh/')) return path.replace(/^\/zh/, '/en');
+  return path.startsWith('/en') ? path : `/en${path}`;
+};
+const toChinesePath = (path: string): string => {
+  if (path === '/' || path === '/en' || path === '/en/') return '/zh/';
+  if (path.startsWith('/en/')) return path.replace(/^\/en/, '/zh');
+  return path.startsWith('/zh') ? path : `/zh${path}`;
+};
+const altPath = link(lang === 'zh' ? toEnglishPath(pathname) : toChinesePath(pathname));
+const homePath = link(lang === 'zh' ? '/zh/' : '/');
 const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
+const footer = lang === 'zh'
+  ? 'deerflow / source-reading · 源码阅读可视化教程 · pinned & anchored'
+  : 'deerflow / source-reading · visual engineering notes · pinned & anchored';
 ---
 <!doctype html>
 <html lang={htmlLang}>
@@ -31,7 +52,7 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
   <body>
     <header class="site-header">
       <div class="bar">
-        <a class="brand" href={link(`/${lang}/`)}>
+        <a class="brand" href={homePath}>
           <span class="brand-main">deerflow</span>
           <span class="brand-sep">/</span>
           <span>source-reading</span>
@@ -46,7 +67,7 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
     <slot />
 
     <footer class="site-footer">
-      deerflow / source-reading · 源码阅读可视化教程 · pinned &amp; anchored
+      {footer}
     </footer>
   </body>
 </html>
