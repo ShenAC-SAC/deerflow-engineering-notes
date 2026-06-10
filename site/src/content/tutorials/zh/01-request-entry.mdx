@@ -1,0 +1,114 @@
+---
+lang: zh
+slug: 01-request-entry
+station: 1
+title: 请求入口 · 一句话怎么变成一次 run
+sha: 0fb18e36
+sourceRefs:
+  - backend/app/gateway/routers/thread_runs.py
+  - backend/app/gateway/services.py
+  - backend/packages/harness/deerflow/runtime/runs/worker.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+
+每个 Agent 系统都得先回答一个不太光鲜的问题:在它聪明起来之前,谁来接住请求?你在前端敲下的一句话,要先变成一次有身份、有生命周期、能被流式观察的 **run**,模型才有机会开口。这一站,我们看 DeerFlow 怎么把「一句话」接住、立案、装上运行时上下文,再把事件持续流回前端。
+
+记住一句话,它撑起后面所有细节:**DeerFlow 要先是个运行时,才谈得上是个 agent。** Gateway 就是那个运行时宿主——它管接入、管 run 的生死、管把上下文塞进去、管把事件流出来,还得知道什么时候算结束。真正的「思考」要再往下一站才开始。
+
+<FlowDiagram
+  caption="一句话进来,怎么变成一次在后台跑、往前台流的 run"
+  chart={`flowchart TD
+  U["前端 / IM / LangGraph SDK"] --> EP["POST /threads/{id}/runs/stream"]
+  EP --> SR["stream_run() · start_run()"]
+  SR --> RM["RunManager.create_or_reject()"]
+  RM --> CFG["build_run_config() · 兼容适配"]
+  CFG --> TASK["create_task(run_agent)"]
+  TASK -. 后台 .-> RA["run_agent()"]
+  RA --> RT["Runtime(context=...)"]
+  RT --> MK["make_lead_agent(config)"]
+  MK --> ASM["agent.astream(...)"]
+  ASM --> SB["StreamBridge"]
+  SR --> SSE["sse_consumer() · SSE 事件"]
+  SB --> SSE`}
+/>
+
+## 两个「运行时」,别搞混
+
+读这一段最容易踩的坑,是把三样东西混成一样:
+
+```text
+LangGraph         = agent 用的执行内核(图怎么跑)
+LangGraph Server  = 官方可选的 HTTP 运行时
+DeerFlow Gateway  = 当前主要的 HTTP 运行时,兼容 LangGraph API
+```
+
+`backend/langgraph.json` 里还登记着 `lead_agent`,那是为了让官方 LangGraph Server / Studio / CLI 还能照常工作。但**主链上 Gateway 是直接 import 并调用图工厂的**,没绕官方 server。所以你在线上跑的那条路,是 Gateway 这套自己实现的运行时,不是 LangGraph Server。
+
+<MarginNote>一句话分清楚:LangGraph 负责「图怎么执行」,Gateway 负责「请求怎么变成一次可观察、可回滚、可计费的 run」。前者是内核,后者是宿主。</MarginNote>
+
+## 请求落地的四个零件
+
+打开 <SourceRef file="backend/app/gateway/routers/thread_runs.py" sha="0fb18e36" /> 和 <SourceRef file="backend/app/gateway/services.py" sha="0fb18e36" />,你会反复碰到四个角色。别去背每个字段,先记住它们各自答的是哪个问题。
+
+**`RunCreateRequest`** —— 请求长什么样。它带着 `input`、`config`、`context`、`metadata`、`stream_mode`,还有 `interrupt_before / interrupt_after`、`multitask_strategy`、`on_disconnect` 这些控制位。它是「这次 run 想怎么跑」的完整声明。
+
+**`RunManager`** —— run 的户籍科。`create_or_reject()` 决定这次到底立不立案(比如同一 thread 已经在跑、按 `multitask_strategy` 该拒就拒),之后负责 `set_status` / `cancel` / 持久化 run 元数据。
+
+**`StreamBridge`** —— 一道解耦闸。后台图在产事件,HTTP 这边在消费事件,两边不直接拉手:`run_agent()` 往 bridge 里发,`sse_consumer()` 从 bridge 里取、再格式化成 SSE 事件。前端断了,后台也不至于跟着塌。
+
+**`run_agent()`** —— 真正干活的后台 worker(<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="0fb18e36" />)。注意:**它不是 agent 本身,它是托着 agent 跑的那只手。**
+
+## configurable,还是 context?
+
+`build_run_config()` 干的是一件「翻译」活:把 HTTP 请求里的字段,翻成 LangGraph 认识的 `RunnableConfig` 形状。这里藏着整篇最该记的一处兼容债:
+
+```text
+config["configurable"]   旧的运行时选项通道
+config["context"]        新的 LangGraph runtime context 通道
+```
+
+DeerFlow 在兼容模式下,会把关键字段**同时写进两边**——`model_name`、`mode`、`thinking_enabled`、`reasoning_effort`、`is_plan_mode`、`subagent_enabled`、`agent_name`、`is_bootstrap` 这些白名单字段,两个通道各放一份。为什么这么「浪费」?因为老的 DeerFlow 代码从 `configurable` 读,新的 `ToolRuntime.context` 从 `context` 读,只写一边就会有一拨消费者落空。
+
+随后 `run_agent()` 还会建一个 LangGraph `Runtime`,把 `thread_id / run_id / user_id / app_config` 这些 run 级数据装进 `runtime.context`,再塞回 `config["configurable"]["__pregel_runtime"]`,让下游中间件和工具都能按 LangGraph 的运行时 API 拿到它。
+
+<Philosophy>
+
+为什么 Gateway 要自己重写一套 LangGraph 兼容 API,而不直接用官方 LangGraph Server?
+
+因为这样 DeerFlow 才能**亲自掌管**那些「应用级」的东西:鉴权、thread/run 元数据、run 事件存储、SSE 桥、回滚、前端兼容、热加载边界、自己的持久化。这些都不是「图怎么跑」的事,而是「一个产品怎么把图服务出去」的事。
+
+代价是一层兼容胶水:请求字段要翻译成 LangGraph 风味的 config,stream mode 要做映射,运行时上下文要手动装。真正的教训和上一站同源——**把兼容的别扭收进入口这一层,让下游的图执行保持干净。** 内核管执行,宿主扛兼容。
+
+</Philosophy>
+
+<Tradeoff leftTitle="自己当宿主 · Gateway" rightTitle="代价 · 兼容胶水">
+  <Fragment slot="left">
+
+  - 自己掌握鉴权 / 元数据 / 回滚 / 持久化
+  - 前端、IM、SDK 多宿主统一接入
+  - run 的生命周期完全可控
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - 字段要翻成 LangGraph 风味的 config
+  - `configurable` / `context` 双写,历史债
+  - `run_agent()` 一个函数扛了太多事
+
+  </Fragment>
+</Tradeoff>
+
+## 会绊倒你的地方
+
+- **`configurable` 和 `context` 是历史兼容债。** 某个字段只写了一边,老代码或新 `ToolRuntime.context` 消费者就可能读空。加新字段时,先确认它该进哪个白名单、是不是要双写。
+- **`run_agent()` 是个「编排重」函数。** 它把图调用、持久化、流式发布、回滚、tracing、清理全混在一起——强大,但也密。改它之前先认清你在改哪一段。
+- **它走后台 task。** 断连、取消、回滚、最终 checkpoint 落盘都得小心处理,否则可能把「跑了一半的状态」当成功返回。
+- **它不直接改 `ThreadState`。** run 记录、thread 元数据、流事件是 Gateway 写的;agent 的图状态由图执行自己写。看到状态变化,先分清是谁动的手。
+
+---
+
+入口这一站的全部职责,就是把「用户输入」变成「一次在跑的图」,再把它流回去——然后退到幕后。它接住了请求、立了案、装好了上下文。接下来,请求会走进 `make_lead_agent()`:第一次不再是数据,而要被装配成一张能跑的图。下一站见。

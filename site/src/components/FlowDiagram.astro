@@ -19,15 +19,16 @@ const { chart, caption } = Astro.props;
     themeVariables: {
       fontFamily: '"Spline Sans Mono", ui-monospace, Menlo, monospace',
       fontSize: '14px',
-      background: '#0c121b',
-      primaryColor: '#161f2b',        // 节点底
-      primaryBorderColor: '#5cc8e8',  // 节点:冷蓝图描边(结构)
-      primaryTextColor: '#ece7dd',    // 节点文字(暖纸)
-      secondaryColor: '#161f2b',
-      tertiaryColor: '#0c121b',
-      lineColor: '#d98f48',           // 连线:暖琥珀(请求在流动)
-      edgeLabelBackground: '#0e131b',
-      clusterBkg: '#0c121b',
+      background: '#f3ecdf',          // 暖纸底
+      primaryColor: '#fbf6ec',        // 节点底:抬升纸面
+      primaryBorderColor: '#2c5a86',  // 节点:制图蓝描边(结构)
+      primaryTextColor: '#211d16',    // 节点文字(墨)
+      secondaryColor: '#f1e8d8',
+      tertiaryColor: '#f3ecdf',
+      lineColor: '#ce4326',           // 连线:朱砂(请求在流动)
+      edgeLabelBackground: '#f3ecdf',
+      clusterBkg: '#f1e8d8',
+      clusterBorder: '#cabb9f',
     },
   });
   const run = () => mermaid.run({ querySelector: '.mermaid' });
@@ -37,13 +38,14 @@ const { chart, caption } = Astro.props;
 
 <style>
   .flow {
-    margin: 24px 0; padding: 14px;
-    background: var(--bg-panel); border: 1px solid var(--bg-elev);
+    margin: 26px 0; padding: 16px;
+    background: var(--panel); border: 1px solid var(--line);
     border-radius: var(--radius); overflow-x: auto;
+    box-shadow: var(--shadow-card);
   }
   .flow .mermaid { background: none; border: none; padding: 0; text-align: center; }
   .flow figcaption {
     margin-top: 10px; text-align: center;
-    font-family: var(--mono); font-size: .76rem; color: var(--ink-dim);
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
   }
 </style>

@@ -1,4 +1,4 @@
 ---
-// 根路径 → 默认中文旅程首页
-return Astro.redirect('/zh/');
+// 根路径 → 默认中文旅程首页(带 base 前缀)
+return Astro.redirect(import.meta.env.BASE_URL + 'zh/');
 ---

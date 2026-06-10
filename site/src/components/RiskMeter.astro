@@ -1,17 +1,20 @@
 ---
-// 风险计:value 1..5 → ●●●○○
-interface Props { value: number; }
-const { value } = Astro.props;
+// 风险计:value 1..5 → ●●●○○。单色仪表 —— 靠「亮起的数量」说话,不和朱砂抢戏。
+interface Props { value: number; lang?: 'zh' | 'en'; }
+const { value, lang = 'zh' } = Astro.props;
 const v = Math.max(1, Math.min(5, Math.round(value)));
 const on = '●'.repeat(v);
 const off = '○'.repeat(5 - v);
+const tip = lang === 'zh' ? `碰它会炸什么 · 风险 ${v}/5` : `blast radius · risk ${v}/5`;
 ---
-<span class="risk-meter" aria-label={`风险 ${v}/5`} title={`碰它会炸什么 · 风险 ${v}/5`}>
+<span class="risk-meter" aria-label={`risk ${v}/5`} title={tip}>
+  <span class="risk-cap">risk</span>
   <span class="risk-on">{on}</span><span class="risk-off">{off}</span>
 </span>
 
 <style>
-  .risk-meter { font-family: var(--mono); letter-spacing: 2px; font-size: .92em; white-space: nowrap; }
-  .risk-on { color: var(--risk); }
-  .risk-off { color: var(--ink-faint); }
+  .risk-meter { font-family: var(--mono); font-size: .82rem; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+  .risk-cap { font-size: .62rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); }
+  .risk-on { color: var(--ink); letter-spacing: 2px; }
+  .risk-off { color: var(--line-2); letter-spacing: 2px; }
 </style>

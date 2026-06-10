@@ -5,14 +5,26 @@
 // 用法: node scripts/check-source-refs.mjs   (从 tutorials/site 运行)
 // 退出码: 0 全部命中 / 1 有缺失(并列出)
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-const here = dirname(fileURLToPath(import.meta.url));        // tutorials/site/scripts
+const here = dirname(fileURLToPath(import.meta.url));        // <repo>/site/scripts
 const contentDir = resolve(here, '../src/content/tutorials');
-const deerflowRoot = resolve(here, '../../..');             // → deer-flow 仓库根
+// deer-flow 仓库根:优先 DEERFLOW_ROOT(独立仓库 / CI 用);
+// 兜底用相对路径(本仓库仍躺在 deer-flow 工作树里时仍可用)。
+const deerflowRoot = process.env.DEERFLOW_ROOT
+  ? resolve(process.env.DEERFLOW_ROOT)
+  : resolve(here, '../../..');
+
+// 锚定校验依赖一份本地 deer-flow clone。找不到就清晰报错,别静默放行。
+if (!existsSync(join(deerflowRoot, 'backend'))) {
+  console.error(`\n✗ 找不到 deer-flow 源码仓库:${deerflowRoot}`);
+  console.error('  锚定校验需要一份本地 deer-flow clone。请设置 DEERFLOW_ROOT 指向它,例如:');
+  console.error('    DEERFLOW_ROOT=/path/to/deer-flow pnpm check:refs\n');
+  process.exit(1);
+}
 
 // 递归收集 .mdx
 function walk(dir) {

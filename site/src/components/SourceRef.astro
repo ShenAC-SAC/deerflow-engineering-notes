@@ -1,5 +1,6 @@
 ---
 // 钉死的源码指针:链到 GitHub 对应 SHA 的 blob。锚定不变量,防教程漂移。
+// 视觉上像一条源码锚点:⌖ file::symbol @sha
 interface Props {
   file: string;
   sha: string;
@@ -22,12 +23,15 @@ const text = `${label}${symbol ? `::${symbol}` : ''}`;
   .source-ref {
     display: inline-flex; align-items: center; gap: 7px;
     font-family: var(--mono); font-size: .78rem;
-    background: var(--bg-elev); border: 1px solid #21456a;
+    background: var(--paper-sunk); border: 1px solid var(--line-2);
     border-radius: 6px; padding: 3px 9px; margin: 3px 6px 3px 0;
     text-decoration: none; max-width: 100%;
+    transition: border-color .15s, background .15s;
   }
-  .source-ref:hover { border-color: var(--accent); text-decoration: none; }
-  .sr-ico { color: var(--accent); }
-  .sr-file { background: none; color: var(--ink); padding: 0; word-break: break-all; }
+  .source-ref:hover {
+    border-color: var(--signal); background: var(--signal-wash); text-decoration: none;
+  }
+  .sr-ico { color: var(--signal); }
+  .sr-file { background: none; color: var(--ink-2); padding: 0; word-break: break-all; }
   .sr-sha { color: var(--ink-faint); }
 </style>

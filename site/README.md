@@ -1,7 +1,8 @@
-# DeerFlow 源码阅读 · 可视化教程博客
+# DeerFlow Engineering Notes · Site
 
-把 `tutorials/` 里的源码阅读笔记,升级成一个**可视化、双语、风趣一点点**的工程博客。
-索引是「请求的旅程」主线(A),每一站是一张「心智模型卡」(D),点开是双语深读。
+DeerFlow 2.0 Python 版工程源码手记。
+
+站点用「请求的旅程」组织文章:从一句话进入 Gateway,到 run 创建、agent 图装配、工具能力计算,逐站拆开 DeerFlow 的运行时设计。目标是把工业级 Agent 系统讲清楚,同时保留一点轻松的工程博客语气。
 
 ## 心智模型
 
@@ -19,8 +20,9 @@
 pnpm dev          # 本地预览 http://localhost:4321
 pnpm build        # 静态构建到 dist/
 pnpm preview      # 预览构建产物
-pnpm check:refs   # 锚定校验:sourceRefs 必须在钉死的 SHA 下真实存在
-pnpm check        # check:refs && build(提交前跑这个)
+pnpm check:content # 内容守卫:地图/正文一致,避免旧隐喻词回流
+pnpm check:refs    # 锚定校验:sourceRefs 必须在钉死的 SHA 下真实存在
+pnpm check         # check:content && check:refs && build(提交前跑这个)
 ```
 
 ## 目录
@@ -36,7 +38,8 @@ src/
   layouts/                        BaseLayout / TutorialLayout
   pages/[lang]/index.astro        旅程首页
   pages/[lang]/journey/[station]  深读页(仅 published)
-  styles/theme.css                视觉识别:Blueprint Noir(蓝图青×信号琥珀双色温·衬线编辑风)
+  styles/theme.css                视觉识别:暖纸工程手记(牛皮纸·墨色·朱砂·制图蓝)
+scripts/check-content.mjs         内容守卫:地图/正文一致 + 术语边界
 scripts/check-source-refs.mjs     锚定校验脚本
 ```
 
@@ -57,11 +60,11 @@ scripts/check-source-refs.mjs     锚定校验脚本
    ```
 3. 正文用 `<MentalModel>`(开场由布局自动渲染)、`<FlowDiagram>`、`<Philosophy>`、
    `<Tradeoff>`、`<MarginNote>`、`<SourceRef>` 等组件。
-4. `pnpm check` 必须绿(锚点存在 + 构建通过)。
+4. `pnpm check` 必须绿(内容守卫 + 锚点存在 + 构建通过)。
 
 ## 约定
 
 - 中英**统一笔调、风趣一点点**,纯文字 + 可视化,无音频。
 - **工程设计哲学是一等公民**:用 `<Philosophy>` / `<Tradeoff>` 显式承载「为什么这么设计」。
 - 源码指针**钉 SHA、锚定不变量**;改源码后用 `pnpm check:refs` 复核。
-- 本仓库独立于 deer-flow 上游,**不进上游 PR 分支**。
+- `site/src/data/journey.ts` 是旅程地图的单一真相源;已发布站点必须同时有 zh/en 深读。

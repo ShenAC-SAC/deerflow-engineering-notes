@@ -11,7 +11,8 @@
     "preview": "astro preview",
     "astro": "astro",
     "check:refs": "node scripts/check-source-refs.mjs",
-    "check": "node scripts/check-source-refs.mjs && astro build"
+    "check:content": "node scripts/check-content.mjs",
+    "check": "node scripts/check-content.mjs && node scripts/check-source-refs.mjs && astro build"
   },
   "dependencies": {
     "@astrojs/mdx": "^6.0.3",

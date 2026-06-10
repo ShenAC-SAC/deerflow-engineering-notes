@@ -1,0 +1,150 @@
+---
+lang: zh
+slug: 03-tools-assembly
+station: 3
+title: 工具装配 · list[BaseTool] 不该是唯一真相源
+sha: 0fb18e36
+sourceRefs:
+  - backend/packages/harness/deerflow/tools/tools.py
+  - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/packages/harness/deerflow/skills/tool_policy.py
+  - backend/packages/harness/deerflow/tools/builtins/tool_search.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+
+第一次读 tools 模块,几乎所有人都会把它读成「这里注册了一堆函数」。这个理解只对了一小半。它真正的样子,要等你某天发现**一个工具明明配了、却没出现在模型面前**,才会现身——那一刻你才会去问:工具的「可见」到底是谁决定的?
+
+先抓住一个判断,后面就都好读了:**这一站讲的不是函数注册表,而是一次 run 的「能力快照」。** 哪些工具来自配置,哪些来自内置能力,哪些会因为模型、沙箱、skill、MCP 或子 agent 策略被加入、移除,或者暂时不把 schema 暴露给模型——算完这一切,才有那份交给 `create_agent(..., tools=...)` 的最终列表。
+
+<FlowDiagram
+  caption="从『工具来源』到『这次 run 到底能看见什么』——两段式装配"
+  chart={`flowchart TD
+  SRC["config.yaml · 内置 · MCP · ACP"] --> GA["get_available_tools()"]
+  GA --> G1["tool_groups 过滤"]
+  G1 --> G2["host bash 安全闸"]
+  G2 --> G3["模型能力 · vision"]
+  G3 --> DD["按 tool.name 去重"]
+  DD --> SK["skill allowed_tools 过滤"]
+  SK --> DF["assemble_deferred_tools · MCP 延迟暴露"]
+  DF --> CA["create_agent(tools=final_tools)"]`}
+/>
+
+## 候选集,不是最终集
+
+主入口在 <SourceRef file="backend/packages/harness/deerflow/tools/tools.py" sha="0fb18e36" /> 的 `get_available_tools()`。但请注意:**它产出的还不是最终工具列表,只是候选集。** 它回答的是一个有限的问题:
+
+```text
+按系统配置、内置能力和 runtime 开关,这个 agent 候选对象「能拿到」哪些工具?
+```
+
+它大致按这个顺序走:从 `AppConfig.tools` 起步 → 按自定义 agent 的 `tool_groups` 过滤 → 不允许 host bash 就先把它摘掉 → 用 `resolve_variable(cfg.use, BaseTool)` 动态导入 → 补内置工具 → 按开关加 `task_tool`、按模型能力加 `view_image_tool` → 接 MCP / ACP → 最后**按 `tool.name` 去重**。
+
+之后回到 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" /> 的 `_make_lead_agent()`,候选集还要再过两道:skill 级的 `allowed_tools` 过滤,和 MCP deferred tool 的装配。所以「能看见什么」是**两段式**的——先攒候选,再上策略。
+
+## 配置不是工具本身
+
+`config.yaml` 里的工具长这样:
+
+```yaml
+tools:
+  - name: read_file
+    group: file:read
+    use: deerflow.sandbox.tools:read_file_tool
+```
+
+那个 `use` 不是 Python 语法,而是 DeerFlow 的一个约定:`module.path:variable_name`。`resolve_variable()` 把冒号前交给 `import_module()`,再从模块里取冒号后的变量,并校验它确实是个 `BaseTool` 实例。
+
+这带来一个**关键区别**,记牢它能省你半天排查:
+
+```text
+配置里的 name  =  人读配置时的标签
+tool.name      =  真正暴露给模型、用来路由的名字
+```
+
+最终路由看的是 `BaseTool.name`,不一定等于 `config.yaml` 里写的 `name`。两者一旦不一致,模型看到的是一个 schema 名、运行时按另一个名字路由——DeerFlow 会为此打 warning。
+
+<MarginNote>动态导入很灵活,代价是失败得晚:模块路径写错、变量名写错、可选依赖没装、或者取出来的根本不是 BaseTool,都要等运行期解析时才炸。</MarginNote>
+
+## 可见性是好几道门,不是一张白名单
+
+「工具为什么不见了」之所以难查,是因为它要穿过好几道门,每道门的钥匙在不同文件:
+
+- **`tool_groups`** —— 自定义 agent 的粗粒度白名单。配了就只留对应 group 的工具。
+- **host bash 安全闸** —— 即使 `config.yaml` 配了 `bash`,也要先过 `is_host_bash_allowed(config)`;不允许就摘掉。这是条**安全边界**,不是普通开关。
+- **模型能力** —— `view_image_tool` 只有在选中的模型声明 `supports_vision` 时才追加。
+- **skill 策略** —— <SourceRef file="backend/packages/harness/deerflow/skills/tool_policy.py" sha="0fb18e36" /> 的 `filter_tools_by_skill_allowed_tools()`:没有任何 skill 声明 `allowed_tools` 时保持「全放行」,一旦有 skill 显式声明,就只留声明集合里的名字。这是「最小权限」落到工具上的那一刀。
+
+## 工具不止一种形态
+
+读 tools 模块的第二个误区,是以为每个工具都只是「函数调用」。DeerFlow 的工具至少有四种形态,认清它们,后面好几站都省力:
+
+- **普通执行工具** —— `@tool` 包出来的 `BaseTool`,模型发 `tool_call`、ToolNode 执行函数。`read_file`、`web_search`、`bash` 都是。
+- **状态更新工具** —— `present_files` 不只返回文本,而是返回 LangGraph `Command(update={"artifacts": ...})`,**直接写进图状态**,前端再据此渲染产物。
+- **控制流工具** —— `ask_clarification` 的函数体只是个占位,真正行为在 `ClarificationMiddleware`:它拦下调用、`Command(..., goto=END)` 停住当前 run,等用户下一条消息。**需要人输入时,把它建模成 interrupt,而不是让工具阻塞等人。**
+- **委派工具** —— `task` 是子 agent 入口:继承父级沙箱/模型/工具策略,用 `subagent_enabled=False` 构造子工具集(避免递归暴露 `task`),后台跑 `SubagentExecutor`,再把结果当 tool result 还回来。
+
+<MarginNote>留意这条 2.x 的设计味道:父 agent「能不能委派」,直接表现为工具列表里有没有 task_tool。能力开关和工具列表修改耦在一起——子 agent 那一站会专门拆这件事。</MarginNote>
+
+## 工具存在,schema 却不一定暴露
+
+MCP 工具是最能体现「list 不是唯一真相源」的例子。打开 `tool_search.enabled` 后,MCP 工具**不会**把完整 schema 一次塞给模型——prompt 里只列名字,等模型需要时再调 `tool_search` 取 schema。道理很实在:
+
+```text
+一个 MCP server 可能暴露几十个工具。
+全量绑 schema = prompt 变大、成本变高、模型选工具被噪声干扰。
+```
+
+这条链路横跨好几层,正是 DeerFlow「一个功能摊在多个模块」的典型(<SourceRef file="backend/packages/harness/deerflow/tools/builtins/tool_search.py" sha="0fb18e36" />):
+
+```text
+get_available_tools  ->  tag_mcp_tool(t) 打标
+assemble_deferred_tools  ->  建 catalog + tool_search,返回 DeferredToolSetup
+apply_prompt_template  ->  prompt 只列 deferred 工具名
+model 调 tool_search  ->  返回匹配 schema + 写 state.promoted
+DeferredToolFilterMiddleware  ->  未 promoted 的 schema 不给模型;直接调就回 error
+```
+
+`ThreadState.promoted` 的 reducer 用 `catalog_hash` 做作用域:hash 没变就合并 promoted 名字,hash 变了就替换——这样旧状态里的同名 promotion,不会在 MCP 配置变化后错误地放出另一个工具。
+
+<Philosophy title="工程设计哲学">
+
+整章最该带走的,是这个**两段式**的刻意分工:
+
+`get_available_tools()` 回答「这次 run 候选能看见哪些工具」;`filter_tools_by_skill_allowed_tools()` 回答「skill 加载后,还允许哪些」。把「工具来源」和「工具策略」分开,可见性才能**同时**被 agent 级配置和 skill 级最小权限两套规则控制,而不互相打架。
+
+再往上抽一层:**工具的可见性是一次策略计算的结果,不是一张静态注册表。** 当你以后排查「工具不见了」,该问的不是「函数在不在」,而是「在哪道门、被哪条策略、按什么理由拦下了」。这也是 3.0 想把 `ToolRegistry / ToolPolicy / ToolRuntime` 拆开的动机:注册、策略、执行,本就是三个问题。
+
+</Philosophy>
+
+<Tradeoff leftTitle="动态装配的好处" rightTitle="代价">
+  <Fragment slot="left">
+
+  - 来源可插拔:config / 内置 / MCP / ACP 一视同仁
+  - 可见性按 run 计算,能按模型、沙箱、skill 收放
+  - deferred 让海量 MCP 工具不撑爆 prompt
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - 动态导入失败得晚(运行期才炸)
+  - 一个功能摊在 metadata/装配/prompt/state/中间件 多处
+  - `tool.name` 与 config name 可能不一致
+
+  </Fragment>
+</Tradeoff>
+
+## 会绊倒你的地方
+
+- **`config name` 不等于 `tool.name`。** 最终路由看 `BaseTool.name`。两者不一致时,模型看到的名字和运行时路由的名字会错位。
+- **host bash 是安全边界,不是普通开关。** 配了不代表放行,得过 `is_host_bash_allowed(config)`。
+- **MCP 有独立的「新鲜度」路径。** `get_available_tools()` 收了 `app_config`,但 MCP 扩展会再从磁盘读一次(按 mtime 判断 cache 是否过期),以免跨进程拿到旧配置。
+- **「可见」不等于「可执行」。** deferred MCP 工具仍被 ToolNode 持有、可执行,只是 schema 先不暴露给模型——没 promoted 就直接调,会被中间件挡回。
+- **去重有优先级。** 顺序是 config → 内置 → MCP → ACP,同名时**先出现的赢**。因为路由按名字走,重名会让 schema 歧义。
+
+---
+
+工具装配这一站,回答的始终是「这次 run **被允许看见 / 调用**哪些工具」,而不是「某个工具**怎么跑**」。把这两件事分开,你就握住了读整个工具系统的线头。可一旦工具齐了、图也装好了,真正决定行为的下一个变量浮出水面:**中间件的顺序**。下一站,我们看中间件顺序怎么直接变成运行语义。

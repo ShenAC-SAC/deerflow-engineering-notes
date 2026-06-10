@@ -90,7 +90,7 @@ Lead Agent graph = model + tools + middleware + system_prompt + ThreadState
 
 `create_agent()` provides the standard model-and-tool loop; DeerFlow only supplies the **materials** (model, tools) and the **policies** (middleware, prompt, state schema).
 
-<Philosophy>
+<Philosophy title="Design rationale">
 
 Why does `make_lead_agent` exist in such an awkward shape? Because it serves several hosts at once: the official LangGraph Server / Studio, the DeerFlow Gateway, embedded clients, tests — and it bridges two conventions, the older `configurable` and the newer `context`.
 

@@ -5,7 +5,7 @@ const { title = '工程设计哲学' } = Astro.props;
 ---
 <aside class="philosophy">
   <header class="ph-head">
-    <span class="ph-ico">🧭</span>
+    <span class="ph-mark" aria-hidden="true">◆</span>
     <span class="ph-title">{title}</span>
   </header>
   <div class="ph-body"><slot /></div>
@@ -14,19 +14,18 @@ const { title = '工程设计哲学' } = Astro.props;
 <style>
   .philosophy {
     position: relative;
-    margin: 30px 0;
-    padding: 18px 20px 14px;
-    background:
-      linear-gradient(180deg, rgba(6,214,160,.08), rgba(6,214,160,.02));
-    border: 1px solid rgba(6,214,160,.30);
-    border-left: 4px solid var(--ok);
+    margin: 32px 0;
+    padding: 16px 20px 14px;
+    background: var(--blue-wash);
+    border: 1px solid rgba(44,90,134,.26);
+    border-left: 3px solid var(--blue);
     border-radius: var(--radius);
   }
-  .ph-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .ph-ico { font-size: 1.1rem; }
+  .ph-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .ph-mark { color: var(--blue); font-size: .7rem; }
   .ph-title {
-    font-family: var(--mono); font-weight: 700; letter-spacing: .06em;
-    color: var(--ok); text-transform: uppercase; font-size: .82rem;
+    font-family: var(--mono); font-weight: 600; letter-spacing: .12em;
+    color: var(--blue-deep); text-transform: uppercase; font-size: .76rem;
   }
   .ph-body :global(p:first-child) { margin-top: 0; }
   .ph-body :global(p:last-child) { margin-bottom: 0; }

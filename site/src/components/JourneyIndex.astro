@@ -1,92 +1,123 @@
 ---
 import StationCard from './StationCard.astro';
 import { JOURNEY, type Lang } from '../data/journey.ts';
+import { link } from '../utils/link.ts';
 
 interface Props { lang: Lang; }
 const { lang } = Astro.props;
 
 const stations = [...JOURNEY].sort((a, b) => a.station - b.station);
+const published = stations.filter((s) => s.status === 'published');
 
 const copy = lang === 'zh'
   ? {
-      kicker: 'deerflow · 源码阅读',
-      title: '请求的旅程',
-      sub: '跟着一个请求,走完它在 DeerFlow 里的一生。每一站是一张心智模型卡 —— 翻开就是一篇深读。',
-      legend: '● = 碰它会炸什么(风险) · 🔒 = 还没修到这一站',
+      kicker: 'DeerFlow 2.0 · 工程源码手记',
+      title: '从一句话到一次 Agent 运行',
+      sub: '我们跟着一个真实请求读 DeerFlow:入口如何创建 run,工厂如何装配图,工具如何进入模型可用范围。只抓主调用链,不按文件夹迷路。',
+      progress: (n: number, p: number) => `主线 · ${n} 站 · 已发布 ${p} 篇`,
+      legend: '■ 已发布,可阅读　·　□ 计划中　·　RISK = 改动影响半径',
     }
   : {
-      kicker: 'deerflow · source reading',
-      title: "The Request's Journey",
-      sub: 'Follow one request through its whole life inside DeerFlow. Each stop is a mental-model card — open it for the deep dive.',
-      legend: '● = blast radius if you touch it (risk) · 🔒 = not paved yet',
+      kicker: 'DeerFlow 2.0 · engineering source notes',
+      title: 'From one sentence to one agent run',
+      sub: 'We read DeerFlow by following one real request: the Gateway creates a run, the factory assembles a graph, and tools enter the model-visible set. We trace the main call chain instead of wandering the folder tree.',
+      progress: (n: number, p: number) => `spine · ${n} stops · ${p} published`,
+      legend: '■ published, ready to read　·　□ planned　·　RISK = blast radius',
     };
 ---
 <section class="journey wrap">
-  <p class="eyebrow">{copy.kicker}</p>
-  <h1 class="journey-title">{copy.title}</h1>
-  <p class="journey-sub">{copy.sub}</p>
+  <header class="hero">
+    <p class="eyebrow hero-kicker">{copy.kicker}</p>
+    <h1 class="hero-title">{copy.title}</h1>
+    <p class="hero-sub">{copy.sub}</p>
+    <p class="progress-chip">{copy.progress(stations.length, published.length)}</p>
+  </header>
 
-  <ol class="spine">
-    {stations.map((s) => (
-      <li class="stop">
-        <span class:list={['rail-node', { live: s.status === 'published' }]} aria-hidden="true"></span>
-        <StationCard
-          station={s.station}
-          title={s.title[lang]}
-          mentalModel={s.mentalModel[lang]}
-          risk={s.risk}
-          altitude={s.altitude}
-          status={s.status}
-          href={`/${lang}/journey/${s.station}`}
-          lang={lang}
-        />
-      </li>
-    ))}
+  <ol class="stops">
+    {stations.map((s) => {
+      const live = s.status === 'published';
+      return (
+        <li class:list={['stop', { live, planned: !live }]}>
+          <span class="rail-idx">{String(s.station).padStart(2, '0')}</span>
+          <span class:list={['rail-node', { live }]} aria-hidden="true"></span>
+          <StationCard
+            station={s.station}
+            title={s.title[lang]}
+            mentalModel={s.mentalModel[lang]}
+            teaser={s.teaser[lang]}
+            risk={s.risk}
+            altitude={s.altitude}
+            status={s.status}
+            href={link(`/${lang}/journey/${s.station}`)}
+            lang={lang}
+          />
+        </li>
+      );
+    })}
   </ol>
 
   <p class="journey-legend eyebrow">{copy.legend}</p>
 </section>
 
 <style>
-  .journey { padding-top: 66px; padding-bottom: 24px; }
-  .journey-title {
-    font-size: 3.5rem; margin: 10px 0 14px; letter-spacing: -.02em; line-height: 1.04;
+  .journey { padding-top: 60px; padding-bottom: 24px; }
+
+  /* —— Hero —— */
+  .hero { max-width: 640px; margin-bottom: 30px; }
+  .hero-kicker { color: var(--blue); }
+  .hero-title {
+    font-size: 3.1rem; margin: 14px 0 16px; letter-spacing: -.02em; line-height: 1.06;
   }
-  .journey-sub {
-    color: var(--ink-dim); max-width: 600px; margin: 0 0 46px; font-size: 1.06rem;
+  .hero-sub {
+    color: var(--ink-2); margin: 0 0 22px; font-size: 1.08rem; line-height: 1.7;
+  }
+  .progress-chip {
+    display: inline-block; margin: 0;
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .05em;
+    color: var(--ink-faint);
+    border: 1px solid var(--line); border-radius: 7px;
+    padding: 4px 11px; background: var(--panel);
   }
 
-  .spine { list-style: none; margin: 0; padding: 0; position: relative; }
-  .stop { position: relative; padding-left: 70px; margin: 0 0 16px; }
-  /* 逐段连接:每站从自己节点画到下一站节点,最后一站不画 → 全程贯通、不半路断 */
+  /* —— 旅程主线 —— */
+  .stops { list-style: none; margin: 38px 0 0; padding: 0; position: relative; }
+  .stop { position: relative; padding-left: 78px; margin: 0 0 14px; }
+
+  /* 站序号(等宽,贴在主线左侧) */
+  .rail-idx {
+    position: absolute; left: 0; top: 30px;
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .02em;
+    color: var(--ink-faint);
+  }
+
+  /* 主线:逐段连接,已发布段实线、计划段虚线 */
   .stop:not(:last-child)::before {
-    content: ""; position: absolute; left: 29px; top: 36px;
-    height: calc(100% + 16px); width: 2px; background: rgba(92,200,232,.26);
+    content: ""; position: absolute; left: 47px; top: 38px;
+    height: calc(100% + 14px); width: 2px;
   }
+  .stop.live:not(:last-child)::before { background: var(--blue); opacity: .42; }
+  .stop.planned:not(:last-child)::before {
+    background: repeating-linear-gradient(
+      to bottom, var(--line-2) 0 5px, transparent 5px 11px
+    );
+  }
+
+  /* 节点:已发布=朱砂实心,计划=空心 */
   .rail-node {
-    position: absolute; left: 22px; top: 28px;
-    width: 16px; height: 16px; border-radius: 50%;
-    background: var(--bg); border: 3px solid var(--accent);
-    box-shadow: 0 0 0 4px rgba(92,200,232,.12);
+    position: absolute; left: 41px; top: 30px;
+    width: 13px; height: 13px; border-radius: 2px;
+    background: var(--paper); border: 2px solid var(--line-2);
   }
-  /* 当前激活的站:暖琥珀 + 呼吸 */
   .rail-node.live {
-    border-color: var(--amber);
-    box-shadow: 0 0 0 4px rgba(244,161,74,.16), 0 0 18px rgba(244,161,74,.5);
-    animation: pulse 2.4s ease-in-out infinite;
+    background: var(--signal); border-color: var(--signal);
+    box-shadow: 0 0 0 4px var(--signal-wash);
   }
-  @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 4px rgba(244,161,74,.16), 0 0 14px rgba(244,161,74,.35); }
-    50%      { box-shadow: 0 0 0 5px rgba(244,161,74,.22), 0 0 26px rgba(244,161,74,.65); }
-  }
-  .journey-legend { margin-top: 40px; text-align: center; }
+
+  .journey-legend { margin-top: 40px; text-align: center; line-height: 2; }
 
   @media (max-width: 560px) {
-    .journey-title { font-size: 2.3rem; }
+    .hero-title { font-size: 2.15rem; }
     .stop { padding-left: 0; }
-    .stop::before, .rail-node { display: none; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .rail-node.live { animation: none; }
+    .stop::before, .rail-node, .rail-idx { display: none; }
   }
 </style>

@@ -1,0 +1,11 @@
+# 依赖与构建产物(site/ 内另有 .gitignore,这里再兜一层)
+**/node_modules/
+**/dist/
+**/.astro/
+
+# 内部规划 / 批评稿,不公开
+specs/
+
+# 系统
+.DS_Store
+*.log

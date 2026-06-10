@@ -11,29 +11,29 @@ const { label = '心智模型' } = Astro.props;
 <style>
   .mental-model {
     position: relative;
-    margin: 14px 0 44px;
+    margin: 16px 0 46px;
     padding: 4px 0 4px 30px;
-    border-left: 2px solid var(--amber);
+    border-left: 2px solid var(--signal);
   }
   /* 装饰性大引号 */
   .mental-model::before {
     content: "\201C";
-    position: absolute; left: 14px; top: .28em;
+    position: absolute; left: 12px; top: .32em;
     font-family: var(--display); font-size: 3rem; line-height: 0;
-    color: var(--amber); opacity: .32;
+    color: var(--signal); opacity: .3;
   }
   .mm-label {
     display: block;
     font-family: var(--mono); font-size: .7rem; letter-spacing: .2em;
-    text-transform: uppercase; color: var(--amber);
+    text-transform: uppercase; color: var(--signal);
   }
   .mm-text {
     margin: .42em 0 0;
     font-family: var(--display); font-style: italic; font-weight: 500;
-    font-size: 2.05rem; line-height: 1.24; color: #fbfaf6;
+    font-size: 2.05rem; line-height: 1.26; color: var(--ink);
     letter-spacing: -.01em;
   }
   @media (max-width: 560px) {
-    .mm-text { font-size: 1.6rem; }
+    .mm-text { font-size: 1.58rem; }
   }
 </style>
