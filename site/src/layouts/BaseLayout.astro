@@ -32,7 +32,9 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
     <header class="site-header">
       <div class="bar">
         <a class="brand" href={link(`/${lang}/`)}>
-          <span class="prompt">deerflow://</span>source-reading<span class="blink">▌</span>
+          <span class="brand-main">deerflow</span>
+          <span class="brand-sep">/</span>
+          <span>source-reading</span>
         </a>
         <span class="spacer"></span>
         <a class="lang-switch" href={altPath}>
@@ -44,7 +46,7 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
     <slot />
 
     <footer class="site-footer">
-      deerflow source-reading · 源码阅读可视化教程 · pinned &amp; anchored
+      deerflow / source-reading · 源码阅读可视化教程 · pinned &amp; anchored
     </footer>
   </body>
 </html>

@@ -35,8 +35,14 @@ DEERFLOW_ROOT=/path/to/deer-flow pnpm check
 
 ```text
 site/    Astro + MDX blog
-notes/   source-reading notes and design observations used as source material
+notes/   source material kept for traceability
 ```
+
+`notes/deerflow-source-code-reading/` keeps the original source-reading notes
+that the public essays were distilled from. `notes/deerflow-3.0-design-notes/`
+keeps forward-looking design observations. Early blog drafts are not kept here:
+once material is rewritten into `site/src/content/tutorials/`, the site becomes
+the canonical public version.
 
 ## License
 

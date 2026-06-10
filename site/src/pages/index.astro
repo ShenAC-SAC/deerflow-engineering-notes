@@ -1,4 +1,10 @@
 ---
-// 根路径 → 默认中文旅程首页(带 base 前缀)
-return Astro.redirect(import.meta.env.BASE_URL + 'zh/');
+import BaseLayout from '../layouts/BaseLayout.astro';
+import JourneyIndex from '../components/JourneyIndex.astro';
+
+const lang = 'zh';
+const title = 'DeerFlow 源码之旅';
 ---
+<BaseLayout title={title} lang={lang}>
+  <JourneyIndex lang={lang} />
+</BaseLayout>

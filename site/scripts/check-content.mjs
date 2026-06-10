@@ -21,6 +21,12 @@ const journeyPath = join(srcDir, 'data/journey.ts');
 
 // —— 违禁词(trace/帧 隐喻)。视觉随意,文字别造这些词。——
 const BANNED = ['帧', '已捕获', '源码栈帧', '上工台', '追踪前沿', '现场笔记'];
+const BANNED_PATTERNS = [
+  { re: /Astro\.redirect\(/, label: 'Astro.redirect(...)', reason: '根路径不要生成静态 redirect 页' },
+  { re: /deerflow:\/\//, label: 'deerflow://', reason: '品牌标题不要做成协议 URL' },
+  { re: /▌/, label: '▌', reason: '品牌标题不要保留闪动光标' },
+  { re: /class=["']blink["']/, label: 'class="blink"', reason: '品牌标题不要保留光标动画' },
+];
 const SCAN_EXT = ['.astro', '.ts', '.mdx', '.css'];
 
 function walk(dir) {
@@ -43,6 +49,11 @@ for (const file of walk(srcDir)) {
     for (const term of BANNED) {
       if (line.includes(term)) {
         failures.push(`${relative(root, file)}:${i + 1}  含违禁词「${term}」 → ${line.trim()}`);
+      }
+    }
+    for (const { re, label, reason } of BANNED_PATTERNS) {
+      if (re.test(line)) {
+        failures.push(`${relative(root, file)}:${i + 1}  含禁用模式「${label}」(${reason}) → ${line.trim()}`);
       }
     }
   });

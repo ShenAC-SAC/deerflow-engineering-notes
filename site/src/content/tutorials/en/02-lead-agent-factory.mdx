@@ -122,8 +122,8 @@ The real lesson: **keep compatibility boundaries explicit, and keep them in one 
 - **`cfg` is an overloaded name.** It carries per-run options, but may also smuggle in infrastructure fields like `app_config`, `thread_id`, or `run_id`. Don't assume what `cfg` holds.
 - **`config` is mutated in place.** The factory writes `metadata` and `callbacks` into it — don't treat it as read-only.
 - **Bootstrap vs. custom agent is easy to mix up.** `setup_agent` shows up only in the bootstrap flow; `update_agent` only when chatting with an existing custom agent. Pick the wrong one and you call the wrong tool.
-- **Middleware order is assembled elsewhere, yet it's part of the final behavior.** Touch this line and you may quietly change runtime semantics — which is precisely the bill the next stop, "order is semantics," comes to collect.
+- **Middleware order is assembled elsewhere, yet it's part of the final behavior.** Touch this line and you may quietly change runtime semantics. The middleware chapter will come back to that bill.
 
 ---
 
-That's the assembly line. Its entire virtue is being **boring**: deterministic, predictable, opinion-free. Next time we take apart `build_middlewares`, and watch how things get less boring once order starts having a temper.
+That's the assembly line. Its entire virtue is being **boring**: deterministic, predictable, opinion-free. Before taking apart middleware, the next stop looks at how the tool list is filtered, because what the model can call decides what this graph can actually do.

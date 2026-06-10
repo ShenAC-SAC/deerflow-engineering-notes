@@ -168,11 +168,10 @@ pre.astro-code { background-color: var(--paper-sunk) !important; }
 }
 .brand {
   font-family: var(--mono); font-weight: 600; font-size: .92rem; color: var(--ink);
-  display: flex; align-items: center; gap: 1px; letter-spacing: -.01em;
+  display: flex; align-items: center; gap: 6px; letter-spacing: -.01em;
 }
-.brand .prompt { color: var(--blue); }
-.brand .blink { color: var(--signal); animation: blink 1.15s steps(2, start) infinite; }
-@keyframes blink { to { opacity: 0; } }
+.brand-main { color: var(--blue); }
+.brand-sep { color: var(--signal); }
 .site-header .spacer { flex: 1; }
 
 .lang-switch {
@@ -190,7 +189,4 @@ footer.site-footer {
   border-top: 1px solid var(--line);
   color: var(--ink-faint); font-family: var(--mono); font-size: .76rem;
   letter-spacing: .04em; text-align: center;
-}
-@media (prefers-reduced-motion: reduce) {
-  .brand .blink { animation: none; }
 }

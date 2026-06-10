@@ -14,36 +14,36 @@ import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 
-你的一句话已经穿过前端、走过 Gateway、变成了一次 run,现在它敲门要进 `make_lead_agent()`。这一站,我们看它怎么把「运行时选项 + 应用配置」拼装成一张能跑的 LangGraph agent 图。
+上一章里，用户输入已经被 Gateway 登记成一次 run。现在它进入 `make_lead_agent()`：这一章看 DeerFlow 如何把「运行时选项 + 应用配置」装配成一张可运行的 LangGraph agent 图。
 
-先记住一件事,后面所有细节都挂在它上面:**这里是装配线,不是大脑。** 真正的「思考」是模型、工具、中间件在跑;这个函数只负责把零件按规矩装好,然后把图交出去。它装完就退场,连图都不亲自执行。
+先记住一件事，后面所有细节都挂在它上面：**这里是装配线，不是大脑。** 真正的「思考」发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去。它装完就退场，连图都不亲自执行。
 
 <FlowDiagram
   caption="一次 run 怎么走到一张编译好的 agent 图"
   chart={`flowchart TD
   FE["前端 / API"] --> GW["DeerFlow Gateway · run_agent()"]
   GW --> MK["make_lead_agent(config)"]
-  MK -->|"兼容适配:解析 AppConfig"| RC["_get_runtime_config(config)"]
+  MK -->|"兼容适配：解析 AppConfig"| RC["_get_runtime_config(config)"]
   RC --> MLA["_make_lead_agent(config, app_config=...)"]
   MLA --> CA["create_agent(model, tools, middleware, prompt, ThreadState)"]
   CA --> G["编译出的 LangGraph agent 图"]`}
 />
 
-## 一个函数,两个名字
+## 一个函数，两个名字
 
-打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />,你会看到一对长得很像的函数:`make_lead_agent()` 和 `_make_lead_agent()`。别嫌弃那个下划线 —— 它划出了整篇最重要的一条边界。
+打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />，你会看到一对长得很像的函数：`make_lead_agent()` 和 `_make_lead_agent()`。不要被那个下划线骗了——它划出了整篇最重要的一条边界。
 
-**`make_lead_agent(config)`** 只收一个参数,因为 LangGraph Server 要求图工厂必须能「只凭一个 config 」被调起(见 <SourceRef file="backend/langgraph.json" sha="0fb18e36" />)。它干的活很轻:解析出 `AppConfig`(优先用运行时注入的,回退到 `get_app_config()`),然后把活转交给下划线版本。它是**兼容适配器**。
+**`make_lead_agent(config)`** 只收一个参数，因为 LangGraph Server 要求图工厂必须能「只凭一个 config」被调起（见 <SourceRef file="backend/langgraph.json" sha="0fb18e36" />）。它干的活很轻：解析出 `AppConfig`（优先用运行时注入的，回退到 `get_app_config()`），然后把活转交给下划线版本。它是**兼容适配器**。
 
-**`_make_lead_agent(config, *, app_config)`** 才是真正的装配函数。那个 `*` 把 `app_config` 设成只能按关键字传 —— 因为两个参数都「长得像 config」,位置传参太容易搞混。它做的是确定性的事:从运行时选项 + 应用配置,一步步把图组装出来。
+**`_make_lead_agent(config, *, app_config)`** 才是真正的装配函数。那个 `*` 把 `app_config` 设成只能按关键字传——因为两个参数语义上都像 config，位置传参太容易搞混。它做的是确定性的事：从运行时选项 + 应用配置，一步步把图组装出来。
 
-<MarginNote>下划线在 Python 里没有任何强制力,纯靠君子协定。但这里它扛起了真正的语义:外面那个管兼容,里面那个管干活。</MarginNote>
+<MarginNote>下划线在 Python 里没有任何强制力，纯靠君子协定。但这里它扛起了真正的语义：外面那个管兼容，里面那个管干活。</MarginNote>
 
 ## 运行选项是怎么拼出来的
 
-`_get_runtime_config()` 把 `config["configurable"]` 和 `config["context"]` 合并。注意这**不是数学并集**,而是有顺序的:先铺 `configurable`,再让 `context` 覆盖同名键。
+`_get_runtime_config()` 把 `config["configurable"]` 和 `config["context"]` 合并。注意这**不是数学并集**，而是有顺序的：先铺 `configurable`，再让 `context` 覆盖同名键。
 
-它读出的核心字段是**每次 run 的选项**,不是全局应用设置:
+它读出的核心字段是**每次 run 的选项**，不是全局应用设置：
 
 ```text
 model_name / model
@@ -58,7 +58,7 @@ agent_name
 
 ## 模型怎么选
 
-模型解析有明确的优先级:
+模型解析有明确的优先级：
 
 ```text
 请求里的 model_name
@@ -66,11 +66,11 @@ agent_name
   > AppConfig.models[0]
 ```
 
-如果 `thinking_enabled=True`、但选中的模型并不支持思考,工厂会记一条 warning,然后老实把 `thinking_enabled` 关掉。想太多也得看模型答不答应。
+如果 `thinking_enabled=True`、但选中的模型并不支持思考，工厂会记一条 warning，然后把 `thinking_enabled` 关掉。想开 thinking mode，也得看模型支不支持。
 
 ## 最终配方
 
-所有零件就位后,装配线吐出这么一行:
+所有零件就位后，装配线吐出这么一行：
 
 ```python
 create_agent(
@@ -82,21 +82,21 @@ create_agent(
 )
 ```
 
-心智模型一句话:
+心智模型一句话：
 
 ```text
 Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
 ```
 
-`create_agent()` 提供标准的「模型 ↔ 工具」循环;DeerFlow 只负责备齐**材料**(模型、工具)和**政策**(中间件、prompt、状态结构)。
+`create_agent()` 提供标准的「模型 ↔ 工具」循环；DeerFlow 只负责备齐**材料**（模型、工具）和**运行约束**（中间件、prompt、状态结构）。
 
 <Philosophy>
 
-为什么 `make_lead_agent` 要这么别扭地存在?因为它同时要伺候好几个宿主:官方 LangGraph Server / Studio、DeerFlow Gateway、嵌入式客户端、测试,还要兼容「老的 `configurable`」和「新的 `context`」两套约定。
+为什么 `make_lead_agent` 要这么绕？因为它同时要兼容好几个宿主：官方 LangGraph Server / Studio、DeerFlow Gateway、嵌入式客户端、测试，还要兼容「老的 `configurable`」和「新的 `context`」两套约定。
 
-`app_config` 既能从运行时 config 里取、又能全局回退 —— 这份别扭,正是为了在**不破坏 LangGraph Server ABI** 的前提下,让 Gateway 注入一份热加载的配置快照。
+`app_config` 既能从运行时 config 里取，又能全局回退。这条绕路，是为了在**不破坏 LangGraph Server ABI** 的前提下，让 Gateway 注入一份热加载的配置快照。
 
-真正的教训是:**兼容边界要显式、要单点。** 把所有别扭集中塞进一个命名清楚的适配函数,让真正的装配保持确定、干净。这比把兼容逻辑撒得到处都是,可维护得多。
+真正的教训是：**兼容边界要显式、要单点。** 把所有兼容逻辑集中塞进一个命名清楚的适配函数，让真正的装配保持确定、干净。这比把兼容逻辑撒得到处都是，可维护得多。
 
 </Philosophy>
 
@@ -105,12 +105,12 @@ Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
 
   - 显式接收 `AppConfig`
   - 从运行时选项**确定性**组装
-  - 好测试、好推理
+  - 更容易测试、推理
 
   </Fragment>
   <Fragment slot="right">
 
-  - 单参 ABI(LangGraph Server 要求)
+  - 单参 ABI（LangGraph Server 要求）
   - `app_config` 走 runtime config + 全局回退
   - `cfg` 命名重载、`config` 被就地改写
 
@@ -119,11 +119,11 @@ Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
 
 ## 会绊倒你的地方
 
-- **`cfg` 是个重载名。** 它装着每次 run 的选项,也可能混进 `app_config`、`thread_id`、`run_id` 这类基础设施字段。看到 `cfg` 别想当然。
-- **`config` 会被就地修改。** 工厂往里塞 `metadata` 和 `callbacks`,别把它当只读对象。
-- **bootstrap 和自定义 agent 容易混。** `setup_agent` 只在 bootstrap 流程出现;`update_agent` 只在已有自定义 agent 的对话里。认错了就调错工具。
-- **中间件顺序在别处装配,却是最终行为的一部分。** 改这条装配线,可能无意中改了运行语义 —— 这正是下一站「顺序即语义」要算的账。
+- **`cfg` 是个重载名。** 它装着每次 run 的选项，也可能混进 `app_config`、`thread_id`、`run_id` 这类基础设施字段。看到 `cfg` 别想当然。
+- **`config` 会被就地修改。** 工厂往里塞 `metadata` 和 `callbacks`，别把它当只读对象。
+- **bootstrap 和自定义 agent 容易混。** `setup_agent` 只在 bootstrap 流程出现；`update_agent` 只在已有自定义 agent 的对话里。认错了就调错工具。
+- **中间件顺序在别处装配，却是最终行为的一部分。** 改这条装配线，可能无意中改了运行语义——这会在中间件章节展开。
 
 ---
 
-装配线看完了。它的全部美德就是**无聊**:确定、可预测、不自作主张。下一次我们拆 `build_middlewares`,看看当顺序开始有脾气时,事情会怎么变得不那么无聊。
+装配线看完了。它的全部美德就是**无聊**：确定、可预测、不自作主张。下一章先不急着拆中间件，而是看工具列表如何被筛出来；因为模型能调用什么，决定了这张图实际能做什么。

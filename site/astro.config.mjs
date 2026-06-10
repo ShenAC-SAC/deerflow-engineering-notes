@@ -4,10 +4,13 @@ import mdx from '@astrojs/mdx';
 
 // DeerFlow 可视化源码教程博客
 // i18n: 中英双语,默认中文,两个 locale 都带前缀(/zh, /en)
+const isGitHubPagesBuild =
+  process.env.GITHUB_ACTIONS === 'true' || process.env.DEPLOY_TARGET === 'github-pages';
+
 export default defineConfig({
-  // GitHub Pages 项目页:站点根 + 子路径 base(供 Astro 生成正确的资源/链接)
+  // GitHub Pages 项目页需要子路径 base；本地开发保持根路径，避免 localhost:4321 变成 404。
   site: 'https://ShenAC-SAC.github.io',
-  base: '/deerflow-engineering-notes/',
+  base: isGitHubPagesBuild ? '/deerflow-engineering-notes/' : '/',
   integrations: [mdx()],
   i18n: {
     locales: ['zh', 'en'],
