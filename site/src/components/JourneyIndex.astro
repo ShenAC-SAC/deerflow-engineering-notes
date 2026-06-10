@@ -13,14 +13,14 @@ const copy = lang === 'zh'
   ? {
       kicker: 'DeerFlow 2.0 · 工程源码手记',
       title: '从一句话到一次 Agent 运行',
-      sub: '我们不按文件夹读源码，而是跟着一次真实请求往下走：入口把用户输入登记成 run，图工厂装配 agent 图，工具策略决定模型能调用什么。源码很多，主线只有一条。',
+      sub: '我们不按文件夹读源码，而是跟着一次真实请求往下走。源码很多，主线只有一条——我们就沿着它一路读到底。',
       progress: (n: number, p: number) => `主线 · ${n} 站 · 已发布 ${p} 篇`,
       legend: '■ 已发布，可阅读　·　□ 计划中　·　RISK = 改动影响半径',
     }
   : {
       kicker: 'DeerFlow 2.0 · engineering source notes',
       title: 'From a prompt to an agent run',
-      sub: 'Instead of touring folders, we follow one real request through the runtime: the gateway records it as a run, the graph factory assembles the agent, and tool policy decides what the model may see. The codebase is broad; the path through it is narrow.',
+      sub: 'Instead of touring folders, we follow one real request through the runtime. The codebase is broad; the path through it is narrow — and we read straight down that path.',
       progress: (n: number, p: number) => `${n} stops · ${p} published`,
       legend: '■ published　·　□ planned　·　RISK = change blast radius',
     };
