@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="./assets/readme-cover.svg" alt="DeerFlow Engineering Notes cover" width="100%" />
+  <img src="./assets/readme-cover.svg" alt="DeerFlow Engineering Notes — one main line from a prompt to an agent run" width="100%" />
 </p>
 
 <h1 align="center">DeerFlow Engineering Notes</h1>
 
 <p align="center">
-  Source-reading notes for the DeerFlow 2.0 Python runtime: from one prompt, through the gateway, into the agent graph.
+  Reading <a href="https://github.com/bytedance/deer-flow">DeerFlow</a>'s Python agent runtime the way you'd actually trace it —
+  following one real request from a prompt all the way to a running agent.
 </p>
 
 <p align="center">
@@ -20,88 +21,52 @@
 
 ---
 
-This repository turns DeerFlow's Python runtime into a bilingual engineering
-blog. It is not a second API reference. The reading path follows one real
-request as it becomes a run, enters the lead-agent factory, receives its tool
-capabilities, and continues through the rest of the agent runtime.
+This is a guided reading map of the DeerFlow 2.0 runtime. Instead of touring folders
+one by one, it follows a single real request as it becomes a **run**, enters the
+lead-agent factory, is handed its tools, and keeps going through the rest of the
+runtime. Every stop pairs a plain-language explanation with the exact source it came
+from, pinned to a commit — so the prose and the code never quietly drift apart.
 
-中文读者可以直接从站点右上角切到中文版本。这里的目标不是把源码逐行翻译成说明书，而是把 DeerFlow 这种工业级 Agent 项目的主链路讲清楚：请求如何进入系统，图如何装配，工具为什么有时出现、有时被策略挡住。
+## Who this is for
 
-## Why DeerFlow
+If DeerFlow's codebase feels like a lot to take in and you're not sure where to start,
+these notes are a way in.
 
-[DeerFlow](https://github.com/bytedance/deer-flow) is a real agent system, not a
-toy demo. That makes it harder to read, but also more valuable to study:
+## DeerFlow is the real thing
 
-- gateway-owned run lifecycle, streaming, rollback, and metadata
-- LangGraph-compatible graph factories and runtime context
-- dynamic tool assembly across built-ins, sandbox tools, skills, MCP, and ACP
-- engineering trade-offs around compatibility, least privilege, and state
+These notes are a map, not the territory. For the full picture — the actual code,
+issues, and roadmap — read the project itself:
 
-If you want to learn how agent runtimes behave once they leave the notebook,
-DeerFlow is worth reading. This repository is the guided map.
+> **→ [bytedance/deer-flow](https://github.com/bytedance/deer-flow)**
 
-## Reading Path
+DeerFlow is a genuine agent system, not a demo: gateway-owned run lifecycle and
+streaming, LangGraph-compatible graph factories, dynamic tool assembly, sandboxing,
+subagents, skills, and persistence. If anything here sparks your curiosity, go read the
+corresponding code upstream.
+
+## Reading path
 
 Published so far:
 
-1. **Request entry**: how a prompt becomes a run.
-2. **Lead-agent factory**: how runtime options become a compiled graph.
-3. **Tool assembly**: why the tool list is computed, not merely registered.
+1. **Request entry** — how a prompt becomes a run.
+2. **Lead-agent factory** — how runtime options become a compiled graph.
+3. **Tool assembly** — why the tool list is *computed*, not merely registered.
 
-Planned stops include middleware, sandboxing, subagents, skills, and persistence.
-Each article pins its source references to a DeerFlow commit, so the prose and
-the code stay connected.
+Planned stops: middleware, sandboxing, subagents, skills, and persistence. Each essay
+pins its source references to a DeerFlow commit, so prose and code stay in step.
 
-## Run Locally
-
-The Astro site lives in `site/`.
-
-```bash
-cd site
-pnpm install
-pnpm dev
-pnpm check
-```
-
-`pnpm check` runs content consistency checks, source-anchor checks, Astro build,
-and route checks for the bilingual site.
-
-For source-anchor checks outside the original DeerFlow workspace, point
-`DEERFLOW_ROOT` at a local clone of `bytedance/deer-flow`:
-
-```bash
-DEERFLOW_ROOT=/path/to/deer-flow pnpm check
-```
-
-## Repository Layout
+## Repository layout
 
 ```text
-site/      Astro + MDX blog
-notes/     source material kept for traceability
+site/      Astro + MDX blog (the canonical public version)
+notes/     raw source-reading notes, kept for traceability
 assets/    README artwork and repo-level visuals
 ```
 
-`notes/deerflow-source-code-reading/` keeps the original source-reading notes
-that the public essays were distilled from. `notes/deerflow-3.0-design-notes/`
-keeps forward-looking design observations. Once material is rewritten into
-`site/src/content/tutorials/`, the site becomes the canonical public version.
+## Status & contributing
 
-## Contributing
+These are personal study notes, kept public so others can read along — not a product,
+and not collecting feature requests of their own.
 
-Contributions are welcome, especially:
-
-- wording fixes in either English or Chinese
-- source-anchor corrections when DeerFlow evolves
-- new stops in the runtime journey
-- diagrams or visual explanations that make the system easier to understand
-
-Please keep three rules in mind:
-
-- explain the engineering reason, not only the code path
-- pin source references to a DeerFlow commit
-- keep the bilingual versions close in meaning, even when the wording is not a literal translation
-
-## License
-
-This repository contains learning notes and blog source. Source references point
-to the upstream DeerFlow project at pinned commits.
+- Want to improve the actual system? Contribute upstream to **[bytedance/deer-flow](https://github.com/bytedance/deer-flow)** — that's where the code, the issues, and the impact live.
+- Spotted a wrong explanation, an awkward translation, or a broken source anchor *here*? An issue is genuinely welcome.

@@ -105,7 +105,7 @@ The cost is a layer of compatibility glue: request fields must be translated int
 ## Where it will trip you up
 
 - **`configurable` and `context` are historical compatibility debt.** A field written to only one side may read empty for old code or for newer `ToolRuntime.context` consumers. Adding a field? First decide which whitelist it belongs to and whether it needs the dual-write.
-- **`run_agent()` is an orchestration-heavy function.** It mixes graph invocation, persistence, stream publishing, rollback, tracing, and cleanup — powerful, but dense. Know which part you're touching before you touch it.
+- **`run_agent()` does too much in one place.** It mixes graph invocation, persistence, stream publishing, rollback, tracing, and cleanup in a single path — powerful, but heavy. Know which part you're touching before you touch it.
 - **It runs as a background task.** Disconnect, cancellation, rollback, and final checkpoint serialization all need care, or you may return "half-finished state" as success.
 - **It doesn't mutate `ThreadState` directly.** Run records, thread metadata, and stream events are written by the Gateway; the agent's graph state is written by graph execution. When state changes, first identify which layer wrote it.
 

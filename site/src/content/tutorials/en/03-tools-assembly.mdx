@@ -85,7 +85,7 @@ The second trap in reading the tools module is assuming every tool is "just a fu
 
 - **Plain execution tool** — a `BaseTool` made by `@tool`; the model emits a `tool_call`, and ToolNode runs the function. `read_file`, `web_search`, and `bash` are examples.
 - **State-updating tool** — `present_files` doesn't just return text; it returns a LangGraph `Command(update={"artifacts": ...})` that **writes graph state directly**, and the frontend renders the artifacts from there.
-- **Control-flow tool** — `ask_clarification`'s function body is only a placeholder; the real behavior is in `ClarificationMiddleware`, which intercepts the call and uses `Command(..., goto=END)` to halt the run until the user's next message. **Model user input as an interrupt, not as a tool blocking on a human.**
+- **Control-flow tool** — `ask_clarification`'s function body is only a placeholder; the real behavior is in `ClarificationMiddleware`, which intercepts the call and uses `Command(..., goto=END)` to halt the run until the user's next message. **Treat user input as an interrupt, not as a tool that sits there blocking on a human.**
 - **Delegation tool** — `task` is the subagent entry: it inherits the parent's sandbox/model/tool policy, builds the child toolset with `subagent_enabled=False` (so `task` isn't recursively exposed), runs a `SubagentExecutor` in the background, and returns the result as a tool result.
 
 <MarginNote>Notice this 2.x design smell: whether a parent agent "can delegate" shows up as whether task_tool is in the list. Capability is coupled to list mutation — the subagent stop comes back to pull that apart.</MarginNote>
