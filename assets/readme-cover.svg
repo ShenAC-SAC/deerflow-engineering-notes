@@ -30,11 +30,6 @@
   <text x="84" y="172" fill="#211D16" font-family="Georgia, 'Times New Roman', serif" font-size="66" font-weight="700" letter-spacing="-1">Engineering Notes</text>
   <text x="86" y="214" fill="#564D3E" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="23">From one sentence to one agent run.</text>
 
-  <!-- status chip, top-right -->
-  <rect x="984" y="66" width="148" height="32" rx="9" fill="#FFF9EE" stroke="#D6C7AA"/>
-  <rect x="1004" y="78" width="9" height="9" rx="2" fill="#CE4326"/>
-  <text x="1024" y="86" fill="#564D3E" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5" font-weight="600">8 stops · 3 live</text>
-
   <!-- the main line: prompt -> 8 stations -->
   <g>
     <!-- published segment (solid vermilion): prompt through 03 -->
@@ -89,11 +84,11 @@
     </g>
   </g>
 
-  <!-- legend, bottom-left -->
+  <!-- legend, bottom-left (carries the stop counts too) -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5">
     <rect x="86" y="380" width="11" height="11" rx="2" fill="#CE4326"/>
-    <text x="104" y="390" fill="#564D3E">published</text>
-    <rect x="214" y="380" width="11" height="11" rx="2" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
-    <text x="232" y="390" fill="#564D3E">planned</text>
+    <text x="104" y="390" fill="#564D3E">3 published</text>
+    <rect x="226" y="380" width="11" height="11" rx="2" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
+    <text x="244" y="390" fill="#564D3E">5 planned</text>
   </g>
 </svg>
