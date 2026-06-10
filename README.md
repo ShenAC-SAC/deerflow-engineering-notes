@@ -9,16 +9,6 @@
   following one real request from a prompt all the way to a running agent.
 </p>
 
-<p align="center">
-  <a href="https://shenac-sac.github.io/deerflow-engineering-notes/"><strong>Read the site</strong></a>
-  ·
-  <a href="https://github.com/bytedance/deer-flow">DeerFlow upstream</a>
-  ·
-  <a href="./site/src/content/tutorials">MDX essays</a>
-  ·
-  <a href="./notes">source notes</a>
-</p>
-
 ---
 
 This is a guided reading map of the DeerFlow 2.0 runtime. Instead of touring folders
@@ -54,6 +44,16 @@ Published so far:
 
 Planned stops: middleware, sandboxing, subagents, skills, and persistence. Each essay
 pins its source references to a DeerFlow commit, so prose and code stay in step.
+
+## Source baseline
+
+These notes track DeerFlow at commit
+[`0fb18e36`](https://github.com/bytedance/deer-flow/commit/0fb18e36), dated **2026-06-09**.
+Every essay pins its source references to that commit, so the prose matches the code
+exactly as of that date. DeerFlow keeps moving, so some explanations will drift out of
+date as the upstream code changes — when that happens, the notes get revised and
+re-pinned to a newer commit. This baseline is the anchor that makes those updates
+trackable.
 
 ## Repository layout
 

@@ -2,7 +2,7 @@
 lang: zh
 slug: 03-tools-assembly
 station: 3
-title: 工具装配 · list[BaseTool] 不是最终答案
+title: 工具装配 · 配了，模型不一定看得到
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/tools/tools.py
@@ -91,7 +91,7 @@ tool.name      =  真正暴露给模型、用来路由的名字
 
 ## 工具存在，schema 却不一定暴露
 
-MCP 工具是最能体现「列表不是最终答案」的例子。打开 `tool_search.enabled` 后，MCP 工具**不会**把完整 schema 一次塞给模型——prompt 里只列名字，等模型需要时再调 `tool_search` 取 schema。理由很实在：
+MCP 工具最能说明「在列表里，也不一定被模型看到」这件事。打开 `tool_search.enabled` 后，MCP 工具**不会**把完整 schema 一次塞给模型——prompt 里只列名字，等模型需要时再调 `tool_search` 取 schema。理由很实在：
 
 ```text
 一个 MCP server 可能暴露几十个工具。

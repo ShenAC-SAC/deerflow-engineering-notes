@@ -2,7 +2,7 @@
 lang: en
 slug: 03-tools-assembly
 station: 3
-title: Tool assembly · the tool list is not the source of truth
+title: Tool assembly · a configured tool can stay hidden
 sha: 0fb18e36
 sourceRefs:
   - backend/packages/harness/deerflow/tools/tools.py
@@ -92,7 +92,7 @@ The second trap in reading the tools module is assuming every tool is "just a fu
 
 ## The tool exists; its schema may not be exposed
 
-MCP tools are the clearest proof that the list is not the final answer. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once. The prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
+MCP tools are the clearest proof that a tool can sit in the list and still be invisible to the model. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once. The prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
 
 ```text
 A single MCP server can expose dozens of tools.
