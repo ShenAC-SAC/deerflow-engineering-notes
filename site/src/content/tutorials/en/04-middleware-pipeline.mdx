@@ -187,7 +187,7 @@ half_open  probe state; let one call test whether the provider recovered
 
 The middleware in this half all do one thing together: **prepare the world the model is about to see before it opens its eyes.** State is ready (directories, sandbox, uploads), context is fresh (date, memory, images), history is compliant (dangling tool calls repaired, overlong history compressed) — and the cost of all that is deliberately kept *out* of the system prompt, so that prefix stays byte-identical and the cache keeps paying off.
 
-DeerFlow's choice is that none of this cross-cutting work goes into the graph. The graph stays a clean "model ↔ tools" loop, and every bit of preparation becomes a layer wrapped around it. Want one more piece of setup? Add a layer; don't touch the graph. The price is that **order becomes an invisible interface** — it shows up in no function signature, only in the comment block above `build_middlewares`. The order planted in this beat only cashes out its most counterintuitive side at the next stop, when the answer travels back out.
+DeerFlow's choice is that none of this cross-cutting work goes into the graph. The graph stays a clean "model ↔ tools" loop, and every bit of preparation becomes a layer wrapped around it. Want one more piece of setup? Add a layer; don't touch the graph. The price is that **order becomes an invisible interface** — it shows up in no function signature, only in the comment block above `build_middlewares`. The order planted in this beat only shows its most counterintuitive side at the next stop, when the answer travels back out.
 
 </Philosophy>
 

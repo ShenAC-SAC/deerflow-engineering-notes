@@ -1,6 +1,6 @@
 <svg width="1200" height="420" viewBox="0 0 1200 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">DeerFlow Engineering Notes</title>
-  <desc id="desc">One main line through the DeerFlow runtime: from a prompt, past the gateway, into the agent graph and its tools. Three stops are published; the rest are planned.</desc>
+  <desc id="desc">One main line through the DeerFlow runtime: from a prompt, past the gateway, into the agent graph and its tools. Four stops are published; the rest are planned.</desc>
 
   <defs>
     <linearGradient id="paper" x1="0" y1="0" x2="1200" y2="420" gradientUnits="userSpaceOnUse">
@@ -30,12 +30,12 @@
   <text x="84" y="172" fill="#211D16" font-family="Georgia, 'Times New Roman', serif" font-size="66" font-weight="700" letter-spacing="-1">Engineering Notes</text>
   <text x="86" y="214" fill="#564D3E" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="23">From one sentence to one agent run.</text>
 
-  <!-- the main line: prompt -> 8 stations -->
+  <!-- the main line: prompt -> 9 stations -->
   <g>
-    <!-- published segment (solid vermilion): prompt through 03 -->
-    <path d="M96 318 H468" stroke="#CE4326" stroke-width="3" stroke-linecap="round"/>
-    <!-- planned segment (dashed ink-blue): 03 onward -->
-    <path d="M468 318 H1108" stroke="#2C5A86" stroke-width="2.5" stroke-linecap="round" stroke-opacity=".55" stroke-dasharray="2 12"/>
+    <!-- published segment (solid vermilion): prompt through 04 -->
+    <path d="M96 318 H544" stroke="#CE4326" stroke-width="3" stroke-linecap="round"/>
+    <!-- planned segment (dashed ink-blue): 04 onward -->
+    <path d="M544 318 H1104" stroke="#2C5A86" stroke-width="2.5" stroke-linecap="round" stroke-opacity=".55" stroke-dasharray="2 12"/>
 
     <!-- prompt entry -->
     <circle cx="96" cy="318" r="13" fill="#CE4326" fill-opacity=".13"/>
@@ -44,50 +44,54 @@
 
     <!-- published nodes -->
     <g filter="url(#nodeShadow)">
-      <rect x="204" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
-      <rect x="332" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
-      <rect x="460" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
+      <rect x="200" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
+      <rect x="312" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
+      <rect x="424" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
+      <rect x="536" y="310" width="16" height="16" rx="3" fill="#CE4326"/>
     </g>
-    <circle cx="212" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
-    <circle cx="340" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
-    <circle cx="468" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
+    <circle cx="208" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
+    <circle cx="320" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
+    <circle cx="432" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
+    <circle cx="544" cy="318" r="15" fill="#CE4326" fill-opacity=".12"/>
 
     <!-- planned nodes -->
-    <rect x="588" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
-    <rect x="716" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
-    <rect x="844" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
-    <rect x="972" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
-    <rect x="1100" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
+    <rect x="648" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
+    <rect x="760" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
+    <rect x="872" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
+    <rect x="984" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
+    <rect x="1096" y="310" width="16" height="16" rx="3" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
 
     <!-- station numbers (above) -->
     <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" text-anchor="middle">
-      <text x="212" y="296" fill="#211D16">01</text>
-      <text x="340" y="296" fill="#211D16">02</text>
-      <text x="468" y="296" fill="#211D16">03</text>
-      <text x="596" y="296" fill="#94886F">04</text>
-      <text x="724" y="296" fill="#94886F">05</text>
-      <text x="852" y="296" fill="#94886F">06</text>
-      <text x="980" y="296" fill="#94886F">07</text>
-      <text x="1108" y="296" fill="#94886F">08</text>
+      <text x="208" y="296" fill="#211D16">01</text>
+      <text x="320" y="296" fill="#211D16">02</text>
+      <text x="432" y="296" fill="#211D16">03</text>
+      <text x="544" y="296" fill="#211D16">04</text>
+      <text x="656" y="296" fill="#94886F">05</text>
+      <text x="768" y="296" fill="#94886F">06</text>
+      <text x="880" y="296" fill="#94886F">07</text>
+      <text x="992" y="296" fill="#94886F">08</text>
+      <text x="1104" y="296" fill="#94886F">09</text>
     </g>
 
     <!-- station labels (below) -->
     <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" text-anchor="middle">
-      <text x="212" y="350" fill="#564D3E">entry</text>
-      <text x="340" y="350" fill="#564D3E">factory</text>
-      <text x="468" y="350" fill="#564D3E">tools</text>
-      <text x="596" y="350" fill="#94886F">middleware</text>
-      <text x="724" y="350" fill="#94886F">sandbox</text>
-      <text x="852" y="350" fill="#94886F">subagents</text>
-      <text x="980" y="350" fill="#94886F">skills</text>
-      <text x="1108" y="350" fill="#94886F">store</text>
+      <text x="208" y="350" fill="#564D3E">entry</text>
+      <text x="320" y="350" fill="#564D3E">factory</text>
+      <text x="432" y="350" fill="#564D3E">tools</text>
+      <text x="544" y="350" fill="#564D3E">mw · in</text>
+      <text x="656" y="350" fill="#94886F">mw · out</text>
+      <text x="768" y="350" fill="#94886F">sandbox</text>
+      <text x="880" y="350" fill="#94886F">subagents</text>
+      <text x="992" y="350" fill="#94886F">skills</text>
+      <text x="1104" y="350" fill="#94886F">store</text>
     </g>
   </g>
 
   <!-- legend, bottom-left (carries the stop counts too) -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5">
     <rect x="86" y="380" width="11" height="11" rx="2" fill="#CE4326"/>
-    <text x="104" y="390" fill="#564D3E">3 published</text>
+    <text x="104" y="390" fill="#564D3E">4 published</text>
     <rect x="226" y="380" width="11" height="11" rx="2" fill="#FBF4E8" stroke="#B39C72" stroke-width="2"/>
     <text x="244" y="390" fill="#564D3E">5 planned</text>
   </g>
