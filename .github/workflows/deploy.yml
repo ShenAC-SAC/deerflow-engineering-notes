@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: bytedance/deer-flow
-          ref: d2cc991d
+          ref: d2cc991d55b05421885923c1791273daec270005
           path: deer-flow
           fetch-depth: 0
 
