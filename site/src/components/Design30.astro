@@ -1,0 +1,28 @@
+---
+// 3.0 设想:挂在某个中间件结尾的「向前看一眼」。用虚线左缘呼应主线语言里
+// 「计划中 = 虚线/空心」——这层还没造,只是设计方向。比 Philosophy 更轻,不抢戏。
+interface Props { label?: string; }
+const { label = '3.0 设想' } = Astro.props;
+---
+<aside class="design30">
+  <span class="d30-label"><span class="d30-arrow" aria-hidden="true">→</span>{label}</span>
+  <div class="d30-body"><slot /></div>
+</aside>
+
+<style>
+  .design30 {
+    margin: 18px 0 26px;
+    padding: 2px 0 2px 18px;
+    border-left: 2px dashed var(--blue);
+  }
+  .d30-label {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--blue-deep);
+    margin-bottom: 4px;
+  }
+  .d30-arrow { color: var(--blue); font-size: .8rem; }
+  .d30-body { color: var(--ink-2); font-size: .94rem; line-height: 1.7; }
+  .d30-body :global(p) { margin: 0; }
+  .d30-body :global(p + p) { margin-top: .6em; }
+</style>

@@ -46,16 +46,25 @@ export const JOURNEY: Station[] = [
     },
   },
   {
-    station: 4, slug: '04-middleware-pipeline', risk: 5, altitude: '架构', status: 'locked',
-    title: { zh: '中间件管线', en: 'Middleware pipeline' },
-    mentalModel: { zh: '顺序即语义', en: 'Order becomes behavior' },
+    station: 4, slug: '04-middleware-pipeline', risk: 4, altitude: '架构', status: 'published',
+    title: { zh: '中间件管线(上)· 请求怎么穿进洋葱', en: 'Middleware pipeline I · inbound through the onion' },
+    mentalModel: { zh: '模型开口前，请求先被一层层打点好', en: 'Before the model speaks, the request is dressed layer by layer' },
     teaser: {
-      zh: '同一组中间件，换个顺序就是另一种 agent。这里要看的，是顺序如何变成运行语义。',
-      en: 'The same middleware in a different order yields a different agent. This stop shows how ordering becomes runtime semantics.',
+      zh: '真正调用模型之前，十来层中间件已经把目录、沙箱、上传、记忆、历史协议全部铺好。这一站走「向内」那半程。',
+      en: 'Before a run ever calls the model, a dozen middleware layers prepare directories, sandbox, uploads, memory, and a protocol-clean history. This stop walks the inbound half.',
     },
   },
   {
-    station: 5, slug: '05-sandbox', risk: 4, altitude: '实现', status: 'locked',
+    station: 5, slug: '05-middleware-return', risk: 5, altitude: '架构', status: 'locked',
+    title: { zh: '中间件管线(下)· 回答怎么穿出来', en: 'Middleware pipeline II · the return trip' },
+    mentalModel: { zh: '模型开口后，谁先看到回答谁就有权改写', en: 'After it speaks, whoever sees the answer first gets to rewrite it' },
+    teaser: {
+      zh: '模型开口之后，洋葱开始向外走：安全、循环、子 agent、工具边界、副作用，逆序登场，各有改写权。',
+      en: 'Once the model speaks, the onion unwinds outward: safety, loops, subagents, tool boundaries, side effects — in reverse order, each with a say.',
+    },
+  },
+  {
+    station: 6, slug: '06-sandbox', risk: 4, altitude: '实现', status: 'locked',
     title: { zh: '沙箱系统', en: 'Sandbox system' },
     mentalModel: { zh: '能力边界，不只是文件系统', en: 'A capability boundary, not a filesystem' },
     teaser: {
@@ -64,7 +73,7 @@ export const JOURNEY: Station[] = [
     },
   },
   {
-    station: 6, slug: '06-subagents', risk: 4, altitude: '架构', status: 'locked',
+    station: 7, slug: '07-subagents', risk: 4, altitude: '架构', status: 'locked',
     title: { zh: '子 agent 系统', en: 'Subagent system' },
     mentalModel: { zh: '委派不是多开一个工具', en: 'Delegation is not another tool' },
     teaser: {
@@ -73,7 +82,7 @@ export const JOURNEY: Station[] = [
     },
   },
   {
-    station: 7, slug: '07-skills', risk: 3, altitude: '架构', status: 'locked',
+    station: 8, slug: '08-skills', risk: 3, altitude: '架构', status: 'locked',
     title: { zh: '技能系统', en: 'Skill system' },
     mentalModel: { zh: '把最小权限写进工具策略', en: 'Least privilege belongs in tool policy' },
     teaser: {
@@ -82,7 +91,7 @@ export const JOURNEY: Station[] = [
     },
   },
   {
-    station: 8, slug: '08-persistence', risk: 3, altitude: '实现', status: 'locked',
+    station: 9, slug: '09-persistence', risk: 3, altitude: '实现', status: 'locked',
     title: { zh: '持久化 · store · checkpointer', en: 'Persistence: store and checkpointer' },
     mentalModel: { zh: 'run 结束后，什么被记住了', en: 'What survives a run' },
     teaser: {

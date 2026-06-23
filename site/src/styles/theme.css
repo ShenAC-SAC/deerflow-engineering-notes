@@ -133,6 +133,23 @@ pre code { background: none; color: inherit; padding: 0; }
 /* Shiki 给 .astro-code 注内联背景色,这里压回暖纸沉底色,保留它的前景 token 配色 */
 pre.astro-code { background-color: var(--paper-sunk) !important; }
 
+/* 正文表格:细线分隔 + 等宽小写表头,贴纸面质感 */
+table {
+  width: 100%; border-collapse: collapse; margin: 1.5em 0;
+  font-size: .92rem; line-height: 1.55;
+}
+th {
+  font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-faint); text-align: left; font-weight: 600;
+  padding: 8px 16px 8px 0; border-bottom: 2px solid var(--line-2);
+}
+td {
+  padding: 9px 16px 9px 0; border-bottom: 1px solid var(--line);
+  color: var(--ink-2); vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+
 /* 小标签工具类(别叫 .label —— 会和 mermaid 内部 .label 撞名) */
 .eyebrow {
   font-family: var(--mono);

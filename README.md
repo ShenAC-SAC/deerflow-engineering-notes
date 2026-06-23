@@ -39,8 +39,9 @@ Published so far:
 1. **Request entry** — how a prompt becomes a run.
 2. **Lead-agent factory** — how runtime options become a compiled graph.
 3. **Tool assembly** — why the tool list is *computed*, not merely registered.
+4. **Middleware pipeline I** — the inbound half: how a dozen layers dress the request before the model ever speaks.
 
-Planned stops: middleware, sandboxing, subagents, skills, and persistence.
+Planned stops: the middleware return trip, sandboxing, subagents, skills, and persistence.
 
 ## Source baseline
 
