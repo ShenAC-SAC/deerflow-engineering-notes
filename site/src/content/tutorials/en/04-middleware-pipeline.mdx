@@ -29,7 +29,7 @@ import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 import Design30 from '../../../components/Design30.astro';
 
-The first time you open `build_middlewares()`, it looks harmless — just a pile of objects getting appended to a list. But the *arrangement* of that list decides the runtime behavior of the entire run that follows. The user's prompt doesn't go straight to the model; it travels through layer after layer of middleware first. They prepare the thread's file paths, handle uploaded attachments, set up the sandbox's lifecycle, inject the date and memory, and patch the message protocol the provider expects — so that by the time the model is actually called, the request has already been shaped into what DeerFlow wants it to see.
+The first time you open `build_middlewares()`, it looks unremarkable — just a series of objects appended one after another to a list. But the *arrangement* of that list decides the runtime behavior of the entire run that follows. The user's prompt doesn't go straight to the model; it travels through layer after layer of middleware first. They prepare the thread's file paths, handle uploaded attachments, set up the sandbox's lifecycle, inject the date and memory, and patch the message protocol the provider expects — so that by the time the model is actually called, the request has already been shaped into what DeerFlow wants it to see.
 
 The last stop looked at how tools get collected and exposed. This one goes deeper: **how a single run crosses the middleware onion and finally reaches the model call.** The other half — how `after_model`, `wrap_tool_call`, and `after_agent` take the result back out in reverse order — is the next stop.
 
@@ -86,7 +86,7 @@ lead-only segment (?-marked layers are conditional)
 
 Two things are worth pinning down before reading on.
 
-**First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't small talk — it's documenting dependencies the type system can't express: `ThreadData` must come before `Sandbox`, `Uploads` must come after `ThreadData`, `Clarification` must be registered last. Changing the order changes behavior, and nothing will warn you that you got it wrong.
+**First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't decorative — it documents dependencies the type system can't express: `ThreadData` must come before `Sandbox`, `Uploads` must come after `ThreadData`, `Clarification` must be registered last. Changing the order changes behavior, and no compile-time check will warn you that you got it wrong.
 
 **Second, registration order is not each hook's execution order.** One middleware can attach to several hooks; within a single hook, wrappers also have an outer/inner relationship. So this chapter doesn't read the list top to bottom — it reads by the run's lifecycle.
 
@@ -102,7 +102,7 @@ Middleware can attach to several kinds of hook. This part covers only the three 
 | `before_model` | before each model call | per turn | Summarization, Todo, ViewImage |
 | `wrap_model_call` | wrapping one model call | per turn | ToolOutputBudget, DanglingToolCall, LLMErrorHandling, LoopDetection, SkillActivation, Todo, DeferredToolFilter |
 
-The other three take the lead only after the model returns:
+The other three come into play only after the model returns:
 
 ```text
 after_model
@@ -156,7 +156,7 @@ what the frontend needs:
   structured info kept in message.additional_kwargs
 ```
 
-So Uploads doesn't blindly stuff file contents into the prompt — it tells the model "which files exist, where they are, what type, roughly what they look like." If the model truly needs the full content, it reads it later through a file tool.
+So Uploads doesn't put entire file contents into the prompt — it tells the model "which files exist, where they are, what type, roughly what's in them." If the model truly needs the full content, it reads it later through a file tool.
 
 **Sandbox** comes from <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="d2cc991d" symbol="SandboxMiddleware" />. This is the easiest one to get wrong: it too defaults to `lazy_init=True`. So `before_agent` usually does *not* acquire a sandbox on the spot; the real acquire may happen on the first sandbox-tool call.
 
@@ -190,7 +190,7 @@ Inside a tool, `runtime.state["sandbox"]` only gives you something like `{"sandb
 
 **DynamicContext** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />. It injects the date and memory as a hidden `HumanMessage` rather than editing the system prompt.
 
-The reason for not touching the system prompt is concrete: the prefix cache. The moment the system prompt changes, the provider's prefix cache is void. Dynamic content like the date and memory has to ride the message stream. DynamicContext does it with an ID-swap, placing the reminder ahead of the user's question while keeping the user's original text recoverable and frontend-hideable.
+The reason for not touching the system prompt is straightforward: the prefix cache. The moment the system prompt changes, the provider's prefix cache is invalidated. Dynamic content like the date and memory has to ride the message stream. DynamicContext does it with an ID-swap, placing the reminder ahead of the user's question while keeping the user's original text recoverable and frontend-hideable.
 
 It also has a reliability touch: the async path offloads the possibly-blocking memory build into `asyncio.to_thread()`, backstopped by a 5-second timeout. That way a slow memory build won't drag the whole run down.
 
@@ -408,7 +408,7 @@ open       circuit open, fast-fail to fallback
 half_open  recovery probe, lets one call test whether the provider recovered
 ```
 
-Note that `closed` here is the healthy state, not "requests closed off" — that's the circuit-breaker industry term, not DeerFlow writing it backwards. Another key point: `GraphBubbleUp` must be re-raised as-is, because it represents LangGraph's interrupt/pause/resume control flow, not an ordinary exception — it can't be swallowed as a provider error.
+Note that `closed` here is the healthy state, not "requests closed off" — that's the standard circuit-breaker term, not DeerFlow inverting it. Another key point: `GraphBubbleUp` must be re-raised as-is, because it represents LangGraph's interrupt/pause/resume control flow, not an ordinary exception — it can't be swallowed as a provider error.
 
 **LoopDetection** in `wrap_model_call` mainly injects a soft warning: if the previous `after_model` judged a loop risk but it hasn't reached a hard stop, it slips a reminder into the next model request. It doesn't inject straight from `after_model` because that would break the AIMessage(tool_calls) → ToolMessage pairing — the warning has to wait until the tool results are all back.
 
@@ -492,7 +492,7 @@ DeerFlow doesn't push this cross-cutting logic into the graph nodes; it puts it 
 ## Easy traps
 
 - **`before_agent` runs once; `before_model` runs every turn.** Paths, uploads, and the sandbox lifecycle are run-level prep; summaries, todo reminders, and image injection ride each model call.
-- **Default lazy init fools your intuition.** `ThreadData` only computes paths by default, and `Sandbox` doesn't acquire on the spot in before_agent. Don't read "middleware registered" as "resource already created."
+- **Default lazy init runs counter to intuition.** `ThreadData` only computes paths by default, and `Sandbox` doesn't acquire on the spot in before_agent. Don't read "middleware registered" as "resource already created."
 - **The chain is assembled conditionally.** Plan mode, the vision model, tool_search, the subagent switch, the guardrail provider — all change the actual middleware list. Before debugging, confirm: is this middleware even in *this* run?
 - **`wrap_model_call` ≠ `before_model`.** DanglingToolCall must insert its patch at the right position in history, so it can only edit this request; `before_model` is better suited to returning a graph-state update.
 - **The system prompt is kept stable on purpose.** Date, memory, skill, todo, images — this dynamic info all rides the message / request overlay. Don't casually edit the system prompt.
