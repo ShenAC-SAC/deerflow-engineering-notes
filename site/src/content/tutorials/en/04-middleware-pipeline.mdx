@@ -84,9 +84,11 @@ lead-only segment (?-marked layers are conditional)
   Clarification       turn ask_clarification into a run-level pause, always last
 ```
 
+The `?`-marked entries in both tables mean a layer **isn't guaranteed to appear in every run**. When `build_middlewares()` assembles them, an `if` wraps the append: it joins the chain only when its condition holds, otherwise it simply isn't in this run's list. The conditions come from runtime config and model capability — `Summarization?` checks whether summarization is on, `TodoList?` whether it's plan mode, `ViewImage?` whether the current model supports vision, `DeferredToolFilter?` whether tool_search is enabled. The ones without `?` (DynamicContext, Title, Memory, Clarification…) are always installed.
+
 Two things are worth pinning down before reading on.
 
-**First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't decorative — it documents dependencies the type system can't express: `ThreadData` must come before `Sandbox`, `Uploads` must come after `ThreadData`, `Clarification` must be registered last. Changing the order changes behavior, and no compile-time check will warn you that you got it wrong.
+**First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't decorative — it documents real data dependencies the type system can't express: `ThreadData` computes the workspace / uploads / outputs paths first, and both `Uploads` (which scans the uploads path for files) and `Sandbox` (whose mounts use those paths) need them, so both must come after `ThreadData`; and `Clarification` has to intercept `ask_clarification` and turn it into a run-level pause before the tool actually runs, so it sits at the innermost edge of the tool boundary and is always registered last. Changing the order changes behavior, and no compile-time check will warn you that you got it wrong.
 
 **Second, registration order is not each hook's execution order.** One middleware can attach to several hooks, and different hooks dispatch in different directions — some forward, some reverse. This is the foundation for everything that follows, so the next section turns the onion over slowly.
 
@@ -236,7 +238,20 @@ Inside a tool, `runtime.state["sandbox"]` only gives you something like `{"sandb
 
 **DynamicContext** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />. It injects the date and memory as a hidden `HumanMessage` rather than editing the system prompt.
 
-The reason for not touching the system prompt is straightforward: the prefix cache. The moment the system prompt changes, the provider's prefix cache is invalidated. Dynamic content like the date and memory has to ride the message stream. DynamicContext does it with an ID-swap, placing the reminder ahead of the user's question while keeping the user's original text recoverable and frontend-hideable.
+The reason for not touching the system prompt is straightforward: the prefix cache. Providers cache the computed result of a stable prompt prefix and reuse it next time the same prefix shows up — saving both time and money; but change a single character of that prefix and the cache is void, recomputed from scratch. Dynamic content like the date and memory, which can change every turn, would keep busting that cache if it lived in the system prompt — so it has to ride the message stream (go into the message list) and leave the system prompt unchanged.
+
+So how do you slip a reminder **ahead of** the user's question without dirtying the original text? DynamicContext uses an **ID-swap**. One premise first: LangGraph's message reducer has a rule — a new message whose id matches an existing one **replaces it in place**; a different id **appends**. DynamicContext leans on that, giving the reminder the original user message's id and re-homing the real user text to a derived id `{original-id}__user`:
+
+```text
+before:
+  [id = X]         the user's question
+
+after:
+  [id = X]         a hidden system-reminder (reuses id X → takes the original's slot)
+  [id = X__user]   the user's question (re-homed to a derived id, right after the reminder)
+```
+
+That does three things at once: the reminder lands ahead of the user's question, the user's text is untouched (only its id changed), and because the reminder carries a `hide_from_ui` marker, the frontend won't render it as a user message.
 
 It also has a reliability touch: the async path offloads the possibly-blocking memory build into `asyncio.to_thread()`, backstopped by a 5-second timeout. That way a slow memory build won't drag the whole run down.
 
@@ -303,6 +318,8 @@ ViewImage
     ]
 }
 ```
+
+`RemoveMessage(REMOVE_ALL_MESSAGES)` is the signal to "drop every existing message," followed by the freshly written summary and preserved window — so this is a **wholesale replacement**, not an append at the end.
 
 The summary itself is a `HumanMessage(name="summary")`. The `HumanMessage` role lets the model read it as background; `name="summary"` tells the runtime and middleware it isn't real user input — so later middleware won't treat the summary as a user prompt and parse slash commands or inject context against it.
 
@@ -460,7 +477,7 @@ Note that `closed` here is the healthy state, not "requests closed off" — that
 
 **LoopDetection** in `wrap_model_call` mainly injects a soft warning: if the previous `after_model` judged a loop risk but it hasn't reached a hard stop, it slips a reminder into the next model request. It doesn't inject straight from `after_model` because that would break the AIMessage(tool_calls) → ToolMessage pairing — the warning has to wait until the tool results are all back.
 
-**SkillActivation** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />. When the user starts with `/skill-name`, it reads the full `SKILL.md` and injects a hidden `HumanMessage` into this call's request. That content doesn't persist into graph state — it's a turn-local request overlay. This way a skill enters the context only when explicitly activated, instead of polluting the prompt every turn.
+**SkillActivation** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />. When the user starts with `/skill-name`, it reads the full `SKILL.md` and injects a hidden `HumanMessage` into this call's request. Note it **doesn't write back to graph state**; it only changes the request sent this one time — that is, it's a **turn-local (scoped to just this turn) request overlay (it covers only this request and is gone next turn)**. This way a skill enters the context only when explicitly activated, instead of polluting the prompt every turn.
 
 Its difference from DynamicContext is worth pulling out:
 
@@ -493,7 +510,7 @@ If the skill doesn't exist, is disabled, or the current agent isn't allowed to u
 
 **Todo** in `wrap_model_call` consumes the completion reminders queued during the `after_model` phase. If the model tries to wrap up while todos are incomplete, Todo's `after_model` jumps back to the model first; the next `wrap_model_call` then injects the hidden reminder into that turn's request.
 
-**DeferredToolFilter** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" />. Its enforcement is two-layered, and you need both:
+**DeferredToolFilter** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" />. Two words first: a **deferred tool** is one not exposed to the model up front — typically the large pool of MCP tools, which would blow up the context and muddle the model's tool choice if all dumped in; to use one, the model must first call `tool_search` to **promote** the few it needs. This middleware's job is to make sure an un-promoted tool is **neither visible nor runnable**. Its enforcement is two-layered, and you need both:
 
 ```text
 wrap_model_call (model side):

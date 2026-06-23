@@ -84,9 +84,11 @@ lead 专属段（带 ? 的按条件装配）
   Clarification       把 ask_clarification 变成 run 级暂停，始终最后注册
 ```
 
+两张表里带 `?` 的项，意思是它**不一定出现在每次 run 里**。`build_middlewares()` 装配它们时外面包了一个 `if`：条件成立才 append 进链，不成立就根本不进这次 run 的列表。条件来自运行时配置和模型能力——`Summarization?` 看有没有开摘要，`TodoList?` 看是不是 plan mode，`ViewImage?` 看当前模型支不支持视觉，`DeferredToolFilter?` 看有没有开 tool_search。不带 `?` 的（DynamicContext、Title、Memory、Clarification……）则每次必装。
+
 这里有两件事值得在往下读之前说清楚。
 
-**第一，顺序本身就是运行时契约。** `build_middlewares()` 上方的注释并非可有可无——它描述的是源码无法用类型系统表达的依赖关系：`ThreadData` 必须在 `Sandbox` 前面，`Uploads` 要在 `ThreadData` 后面，`Clarification` 必须最后注册。改顺序就是改行为，而且不会有任何编译期检查提醒你改错了。
+**第一，顺序本身就是运行时契约。** `build_middlewares()` 上方的注释并非可有可无——它描述的是源码无法用类型系统表达、但真实存在的数据依赖：`ThreadData` 先算出 workspace / uploads / outputs 路径，`Uploads` 要用其中的 uploads 路径去扫文件、`Sandbox` 的挂载也要用这套路径，所以两者都得排在 `ThreadData` 之后；而 `Clarification` 要能在工具真正执行前把 `ask_clarification` 拦成 run 级暂停，得守在工具边界的最里侧，所以总是最后注册。改顺序就是改行为，而且不会有任何编译期检查提醒你改错了。
 
 **第二，注册顺序不等于每个 hook 的执行顺序。** 同一个 middleware 可能挂多个 hook，而不同 hook 的派发方向不一样——有的正序，有的逆序。这一点是后面所有内容的地基，下一节单独把洋葱转一遍讲清楚。
 
@@ -236,7 +238,20 @@ Sandbox instance:
 
 **DynamicContext** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />。它把日期和记忆注入为隐藏的 `HumanMessage`，而不是去改 system prompt。
 
-不动 system prompt 的原因很直接：prefix cache。system prompt 一旦变了，供应商的前缀缓存就会失效。日期和 memory 这种动态内容，必须走 message stream。DynamicContext 的做法是用 ID-swap（ID 互换）把 reminder 放到用户问题前面，同时保持用户原文可恢复、前端可隐藏。
+不动 system prompt 的原因很直接：prefix cache。供应商会把一段稳定 prompt 前缀的计算结果缓存下来，下次遇到同样的前缀直接复用，省时也省钱；可前缀只要变一个字，这份缓存就作废，得从头重算。日期、memory 这种每轮都可能变的动态内容，要是塞进 system prompt，就会不断击穿这层缓存——所以它们只能走 message stream（放进消息列表里），让 system prompt 一直保持不变。
+
+那怎么把一条 reminder 插到用户问题**前面**、又不弄脏用户原文？DynamicContext 用的是 **ID-swap（ID 互换）**。先补一个前提：LangGraph 的消息 reducer 有条规则——新消息的 id 和已有消息相同，就**原地替换**那一条；id 不同，才**追加**。DynamicContext 借这条规则，把 reminder 的 id 设成原用户消息的 id，再把真正的用户原文挪到一个派生 id `{原id}__user` 上：
+
+```text
+注入前：
+  [id = X]         用户的问题
+
+注入后：
+  [id = X]         隐藏的 system-reminder（复用原 id → 顶替掉原消息的位置）
+  [id = X__user]   用户的问题（换成派生 id，紧跟在 reminder 后面）
+```
+
+于是三件事一次做到：reminder 排到了用户问题前面、用户原文一字未改（只换了 id）、而且这条 reminder 带着 `hide_from_ui` 标记，前端不会把它当成用户消息显示。
 
 它还有一个可靠性设计：异步路径会把可能阻塞的 memory 构建放进 `asyncio.to_thread()`，再用 5 秒超时兜底。这样即便 memory 变慢，也不会拖住整个 run。
 
@@ -303,6 +318,8 @@ ViewImage
     ]
 }
 ```
+
+`RemoveMessage(REMOVE_ALL_MESSAGES)` 是"把现有消息全部清掉"的信号，后面紧跟着新写回的摘要和保留段——所以这是一次**整体替换**，不是在末尾追加。
 
 摘要本身是 `HumanMessage(name="summary")`。用 `HumanMessage` 是为了让模型把它当背景来读；`name="summary"` 是让 runtime 和 middleware 知道它不是用户的真实输入——这样后面的 middleware 才不会把摘要当成用户 prompt 去解析 slash command 或者注入上下文。
 
@@ -460,7 +477,7 @@ half_open  恢复探测，只放一个调用测试 provider 是否恢复
 
 **LoopDetection** 在 `wrap_model_call` 里主要注入 soft warning：如果上一轮 after_model 判定有循环风险、但还没到 hard stop，就把提醒插进下一次 model request。之所以不在 after_model 里直接注入，是因为那样会破坏 AIMessage(tool_calls) → ToolMessage 的配对协议——警告要等工具结果都回来了再插入。
 
-**SkillActivation** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />。用户以 `/skill-name` 开头时，它会读取完整 `SKILL.md`，构造一条隐藏 `HumanMessage` 注入本次 request。这个内容不持久进 graph state，属于 turn-local 的 request overlay。这样 skill 只在被显式激活时才进入上下文，不会每轮污染 prompt。
+**SkillActivation** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />。用户以 `/skill-name` 开头时，它会读取完整 `SKILL.md`，构造一条隐藏 `HumanMessage` 注入本次 request。注意它**不写回 graph state**，只改这一次发给模型的 request——也就是说它是 **turn-local（只作用于当前这一轮）的 request overlay（只覆盖本次请求，下一轮就没了）**。这样 skill 只在被显式激活时才进入上下文，不会每轮污染 prompt。
 
 它和 DynamicContext 的差别值得单拎出来看：
 
@@ -493,7 +510,7 @@ SkillActivation 还会把 `SKILL.md` 包进 XML-like envelope：
 
 **Todo** 在 `wrap_model_call` 里负责消费 after_model 阶段排队的 completion reminder。如果模型试图在 todo 未完成时收尾，Todo 的 after_model 会先 jump 回 model；下一次 wrap_model_call 再把隐藏 reminder 注入本轮 request。
 
-**DeferredToolFilter** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" />。它的 enforcement 是双层的，缺一不可：
+**DeferredToolFilter** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" />。先说清两个词：**deferred tool**（延迟工具）是一开始不暴露给模型的工具，典型就是数量庞大的 MCP 工具——全塞进去会撑爆上下文、也干扰模型选工具；模型要用，得先调 `tool_search` 把需要的那几个 **promote（提升）** 出来。这个 middleware 的职责，就是确保没被 promote 的工具**既看不见、也调不动**。它的 enforcement 是双层的，缺一不可：
 
 ```text
 wrap_model_call（model 侧）:
