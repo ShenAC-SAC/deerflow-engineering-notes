@@ -77,3 +77,11 @@ Frontend / API
 
 `make_lead_agent()` is a compatibility adapter. `_make_lead_agent()` is the real lead-agent assembly function.
 
+## Note Strategy
+
+Notes are written in two passes:
+
+1. During module reading, keep a detailed working note while the code context is fresh.
+2. After the module is complete, compress it into a cleaner tutorial version.
+
+This prevents important local details from being lost while still keeping the final tutorial readable.
