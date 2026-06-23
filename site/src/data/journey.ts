@@ -48,7 +48,7 @@ export const JOURNEY: Station[] = [
   {
     station: 4, slug: '04-middleware-pipeline', risk: 4, altitude: '架构', status: 'published',
     title: { zh: '中间件管线(上)· 请求怎么穿进洋葱', en: 'Middleware pipeline I · inbound through the onion' },
-    mentalModel: { zh: '模型开口前，请求先被一层层打点好', en: 'Before the model speaks, the request is dressed layer by layer' },
+    mentalModel: { zh: 'Middleware 不是一条普通流水线，而是一颗包住执行边界的洋葱：请求进入时外层先执行，结果返回时内层先处理。', en: 'Middleware is not a pipeline — it\'s an onion wrapped around the execution boundary: outer layers fire first on the way in, inner layers fire first on the way out.' },
     teaser: {
       zh: '真正调用模型之前，十来层中间件已经把目录、沙箱、上传、记忆、历史协议全部铺好。这一站走「向内」那半程。',
       en: 'Before a run ever calls the model, a dozen middleware layers prepare directories, sandbox, uploads, memory, and a protocol-clean history. This stop walks the inbound half.',
