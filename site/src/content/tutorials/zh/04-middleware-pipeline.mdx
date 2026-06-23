@@ -3,7 +3,7 @@ lang: zh
 slug: 04-middleware-pipeline
 station: 4
 title: 中间件管线（上）：请求如何穿过洋葱
-sha: 4a2f0a23
+sha: d2cc991d
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
   - backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py
@@ -47,9 +47,9 @@ import Design30 from '../../../components/Design30.astro';
 
 ## 一个 list，两段拼出来
 
-装配入口是 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="4a2f0a23" symbol="build_middlewares" />。它先取一段 lead 和 subagent 复用的 runtime 基座，再叠上 lead agent 专属的 middleware。
+装配入口是 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="d2cc991d" symbol="build_middlewares" />。它先取一段 lead 和 subagent 复用的 runtime 基座，再叠上 lead agent 专属的 middleware。
 
-共享基座来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="4a2f0a23" symbol="build_lead_runtime_middlewares" />：
+共享基座来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="d2cc991d" symbol="build_lead_runtime_middlewares" />：
 
 ```text
 共享基座（lead 与 subagent 复用）
@@ -127,7 +127,7 @@ Todo(before_agent cleanup, plan mode only)
 LoopDetection(before_agent reset, if enabled)
 ```
 
-**ThreadData** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py" sha="4a2f0a23" symbol="ThreadDataMiddleware" />。它根据 `thread_id` 和可选的 `user_id` 计算：
+**ThreadData** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py" sha="d2cc991d" symbol="ThreadDataMiddleware" />。它根据 `thread_id` 和可选的 `user_id` 计算：
 
 ```text
 workspace_path
@@ -139,7 +139,7 @@ outputs_path
 
 它还会给最后一条用户消息补上 `run_id` 和 timestamp，方便后续前端或 runtime 识别这一轮输入。这个动作也说明一个容易忽略的事实：middleware 可以在 run 开场就改写消息对象，不一定等到 model call 前才动 messages。
 
-**Uploads** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/uploads_middleware.py" sha="4a2f0a23" symbol="UploadsMiddleware" />。它不负责“上传文件”这个动作；文件已经由前端或 gateway 放进 thread 的 uploads 区。它做的是把当前消息里的新文件和目录里已有的历史文件扫描出来，生成 `<uploaded_files>` 上下文，并 prepend 到最后一条 `HumanMessage` 前面。
+**Uploads** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/uploads_middleware.py" sha="d2cc991d" symbol="UploadsMiddleware" />。它不负责“上传文件”这个动作；文件已经由前端或 gateway 放进 thread 的 uploads 区。它做的是把当前消息里的新文件和目录里已有的历史文件扫描出来，生成 `<uploaded_files>` 上下文，并 prepend 到最后一条 `HumanMessage` 前面。
 
 这一步只有 lead agent 装配。subagent 不装 `UploadsMiddleware`，因为 subagent 继承的是执行上下文，不重新处理用户上传入口。
 
@@ -158,7 +158,7 @@ outputs_path
 
 也就是说，Uploads 不是把文件内容无脑塞进 prompt，而是把“文件存在、在哪里、是什么类型、有什么轮廓”投影给模型。模型如果真的需要完整内容，后续再通过文件工具读取。
 
-**Sandbox** 来自 <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="4a2f0a23" symbol="SandboxMiddleware" />。这里最容易说错：它默认也是 `lazy_init=True`。也就是说，`before_agent` 阶段通常不会马上 acquire 一个 sandbox；真正的 acquire 可能发生在第一次 sandbox tool 调用时。
+**Sandbox** 来自 <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="d2cc991d" symbol="SandboxMiddleware" />。这里最容易说错：它默认也是 `lazy_init=True`。也就是说，`before_agent` 阶段通常不会马上 acquire 一个 sandbox；真正的 acquire 可能发生在第一次 sandbox tool 调用时。
 
 这一层更准确的职责是建立 sandbox 的生命周期和状态契约：
 
@@ -190,7 +190,7 @@ Sandbox instance:
 
 工具里通过 `runtime.state["sandbox"]` 只能拿到类似 `{"sandbox_id": "..."}` 的状态；真正能执行命令、读写文件的是 provider 根据这个 id 找回来的 sandbox 实例。这个分层很关键：state 里存身份，provider 管资源。
 
-**DynamicContext** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="4a2f0a23" />。它把日期和记忆注入为隐藏 `HumanMessage`，而不是改 system prompt。
+**DynamicContext** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />。它把日期和记忆注入为隐藏 `HumanMessage`，而不是改 system prompt。
 
 原因是 prefix cache：system prompt 一旦变化，供应商的前缀缓存就无法复用。日期和 memory 这类动态内容必须走 message stream。DynamicContext 用 ID-swap（ID 互换）把 reminder 放到用户问题前面，同时保持用户原文可恢复、前端可隐藏。
 
@@ -246,7 +246,7 @@ Todo(before_model reminder, plan mode only)
 ViewImage
 ```
 
-**Summarization** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="4a2f0a23" />。历史太长时，它不是简单截断，而是替换整段 messages：
+**Summarization** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="d2cc991d" />。历史太长时，它不是简单截断，而是替换整段 messages：
 
 ```python
 {
@@ -295,7 +295,7 @@ Todo before_model:
   补 graph state 里还活着、但消息窗口里丢失的任务上下文
 ```
 
-**ViewImage** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/view_image_middleware.py" sha="4a2f0a23" />，只有模型支持 vision 时才会装配。它把模型已经通过 `view_image` 工具读过的图片投影成 provider-compatible multimodal message，让后续 model call 真的能看到图片内容，而不只是看到“工具执行成功”。
+**ViewImage** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/view_image_middleware.py" sha="d2cc991d" />，只有模型支持 vision 时才会装配。它把模型已经通过 `view_image` 工具读过的图片投影成 provider-compatible multimodal message，让后续 model call 真的能看到图片内容，而不只是看到“工具执行成功”。
 
 这块要和工具本身分开看：
 
@@ -360,7 +360,7 @@ path:
 
 所以它保护的是 model context budget，而不是替模型理解文件内容。
 
-**DanglingToolCall** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="4a2f0a23" />，负责修补 provider 工具调用协议。它防的是这种历史：
+**DanglingToolCall** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="d2cc991d" />，负责修补 provider 工具调用协议。它防的是这种历史：
 
 ```text
 AIMessage(tool_calls=[call_1])
@@ -396,7 +396,7 @@ request.override(messages=patched)
 
 这就是它选择 `wrap_model_call` 而不是 `before_model` 的原因：补丁必须插到对应 AIMessage 后面，不能简单 append 到末尾。
 
-**LLMErrorHandling** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py" sha="4a2f0a23" />。它守的是 model provider boundary：超时、连接失败、5xx、429、quota/auth 等异常在这里分类处理。可重试的 transient/busy 会退避重试；不可重试或重试耗尽，会返回 fallback `AIMessage`。
+**LLMErrorHandling** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py" sha="d2cc991d" />。它守的是 model provider boundary：超时、连接失败、5xx、429、quota/auth 等异常在这里分类处理。可重试的 transient/busy 会退避重试；不可重试或重试耗尽，会返回 fallback `AIMessage`。
 
 它处理的是 `handler(request)` 抛出的异常，也就是“没拿到正常 AIMessage”的情况。它不处理 provider 正常返回、但返回内容不可信的情况。这个边界很重要：下一站的 `SafetyFinishReasonMiddleware` 就是处理“provider 正常返回 AIMessage，但 finish_reason 表示安全截断，tool_calls 不可信”的情况。
 
@@ -412,7 +412,7 @@ half_open  恢复探测，只放一个调用测试 provider 是否恢复
 
 **LoopDetection** 在 `wrap_model_call` 里主要注入 soft warning：如果上一轮 after_model 判定有循环风险，但还没到 hard stop，就把提醒插进下一次 model request。这样可以避免在 AIMessage(tool_calls) 和 ToolMessage 之间插入不合法消息。
 
-**SkillActivation** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="4a2f0a23" />。用户以 `/skill-name` 开头时，它会读取完整 `SKILL.md`，构造一条隐藏 `HumanMessage` 注入本次 request。这个内容不持久进入 graph state，属于 turn-local request overlay。这样 skill 只有被显式激活时才进入上下文，不会每轮污染 prompt。
+**SkillActivation** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />。用户以 `/skill-name` 开头时，它会读取完整 `SKILL.md`，构造一条隐藏 `HumanMessage` 注入本次 request。这个内容不持久进入 graph state，属于 turn-local request overlay。这样 skill 只有被显式激活时才进入上下文，不会每轮污染 prompt。
 
 它和 DynamicContext 的差别值得单独记：
 
@@ -445,7 +445,7 @@ SkillActivation 还会把 `SKILL.md` 包进 XML-like envelope：
 
 **Todo** 在 `wrap_model_call` 里负责消费 after_model 阶段排队的 completion reminder。如果模型试图在 todo 未完成时收尾，Todo 的 after_model 会先 jump 回 model；下一次 wrap_model_call 再把隐藏 reminder 注入本轮 request。
 
-**DeferredToolFilter** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="4a2f0a23" />。它在 model 侧隐藏还没被 `tool_search` promoted 的 deferred tool schema，避免一次性把大量 MCP 工具 schema 绑给模型。
+**DeferredToolFilter** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" />。它在 model 侧隐藏还没被 `tool_search` promoted 的 deferred tool schema，避免一次性把大量 MCP 工具 schema 绑给模型。
 
 <Design30>
 DeferredToolFilter 的关键不是“藏 schema”本身，而是两点 enforcement：model 侧控制可见 schema，tool 侧控制真实可执行调用。只做前者不够，因为模型仍可能从历史或猜测中调用未 promoted 工具。3.0 可以把它抽象成一等的 `ToolVisibilityPolicy`，同时声明 visible、executable、blocked 三类工具。

@@ -26,8 +26,8 @@ jobs:
       - name: Checkout deer-flow (for source-anchor check)
         uses: actions/checkout@v6
         with:
-          repository: ShenAC-SAC/deer-flow
-          ref: feat/maintainer-orchestrator-enhancements
+          repository: bytedance/deer-flow
+          ref: d2cc991d
           path: deer-flow
           fetch-depth: 0
 
