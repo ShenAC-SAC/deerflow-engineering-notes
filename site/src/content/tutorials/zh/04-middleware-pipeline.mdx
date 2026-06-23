@@ -88,13 +88,59 @@ lead 专属段（带 ? 的按条件装配）
 
 **第一，顺序本身就是运行时契约。** `build_middlewares()` 上方的注释并非可有可无——它描述的是源码无法用类型系统表达的依赖关系：`ThreadData` 必须在 `Sandbox` 前面，`Uploads` 要在 `ThreadData` 后面，`Clarification` 必须最后注册。改顺序就是改行为，而且不会有任何编译期检查提醒你改错了。
 
-**第二，注册顺序不等于每个 hook 的执行顺序。** 同一个 middleware 可能挂多个 hook；同一个 hook 内部还可能有 wrapper 的外层/内层关系。所以这一章不按 list 从上到下念，而是按 run 的生命周期来读。
+**第二，注册顺序不等于每个 hook 的执行顺序。** 同一个 middleware 可能挂多个 hook，而不同 hook 的派发方向不一样——有的正序，有的逆序。这一点是后面所有内容的地基，下一节单独把洋葱转一遍讲清楚。
 
 <MarginNote>同一份代码，不同 run 挂的链可能不一样。plan mode、vision model、tool_search、subagent 开关、guardrail 配置——都会影响最终装配出来的 middleware 列表。</MarginNote>
 
-## 读法：按 run 的阶段，不按文件顺序
+## 注册顺序 ≠ 执行顺序：把洋葱转一遍
 
-middleware 可以挂几类 hook。这一篇只讲模型调用之前的三类：
+这是整章最容易绕晕、又必须先立住的心智模型。先记住一句话，剩下全是推论：
+
+> **先注册的 middleware，是更靠外的那层洋葱皮。**
+
+一个 middleware 可以同时挂好几个 hook（`before_model`、`after_model`、`wrap_model_call`……）。它们共用同一份注册顺序，但**派发方向不一样**。用洋葱来想就全通了：
+
+```text
+东西「进来」时，先穿过外层皮  → 先注册的先跑
+东西「出去」时，先穿过内层    → 后注册的先跑
+```
+
+落到三类 hook 上，其实是同一条规则的三个切面：
+
+```text
+before_*（只在进来时跑）    正序：先注册的先跑
+after_* （只在出去时跑）    逆序：后注册的先跑
+wrap_*  （进、出都管）      洋葱本体：先注册的把后注册的包在里面
+```
+
+举个最小的例子。注册顺序是 `A`（在上）、`B`（在下），两个都挂了 `before_model` 和 `after_model`：
+
+```text
+before_model（请求进来）:   A ──▶ B ──▶ 模型
+after_model （回答出去）:   模型 ──▶ B ──▶ A
+```
+
+A、B 的先后**整个反过来了**：进来时 A 先，出去时 B 先。所以光看 list 里「A 在 B 上面」，根本推不出"A 一定先执行"——得先问是哪个 hook。
+
+`wrap_model_call` 把"进"和"出"压进同一个函数，洋葱看得最清楚。还是 A、B：
+
+```text
+进入 →  A 拿到 request，改一改，调 handler
+          └─ B 拿到 request，改一改，调 handler
+                └─ 真正调用模型，拿到 response
+          ┌─ B 先处理 response
+返回 ←  A 后处理 response
+```
+
+A 是外皮：**最先**碰到请求、**最后**碰到回答；B 在里层：最后碰到请求、最先碰到回答。这就是心智卡那句话的由来——**外层先进，内层先出**。
+
+源码里有现成的印证。下一站会讲的 `SafetyFinishReasonMiddleware` 故意注册得**靠后**（靠里），它的注释写明：就是为了在 `after_model` 的逆序派发里**最先**跑，赶在循环检测、子 agent 计数之前，把 provider 安全截断后不可信的 `tool_calls` 清掉。注册靠里 → 出去时先跑，正好落在上面那条洋葱规则上。
+
+所以这一章**不按 list 从上到下念**，而是按 run 的生命周期走：请求一层层向内（`before_agent` → `before_model` → `wrap_model_call`）抵达模型，回答再一层层向外。哪个 middleware 在哪个阶段登场，就在那个阶段讲——这样你读到的顺序，才是运行时真正发生的顺序。
+
+## 这一篇覆盖的三类 hook
+
+按这个走法，向内半程一共会碰到三类 hook。下面这张表是后面几节的导航——每个 middleware 都会在它登场的阶段细讲：
 
 | Hook | 时机 | 一次 run 跑几次 | 本章涉及 |
 | --- | --- | --- | --- |
@@ -102,7 +148,7 @@ middleware 可以挂几类 hook。这一篇只讲模型调用之前的三类：
 | `before_model` | 每轮 model call 前 | 每轮 | Summarization、Todo、ViewImage |
 | `wrap_model_call` | 包住一次 model call | 每轮 | ToolOutputBudget、DanglingToolCall、LLMErrorHandling、LoopDetection、SkillActivation、Todo、DeferredToolFilter |
 
-剩下三类要到模型返回之后才登场：
+剩下三类要到模型返回之后才登场，是下一站的内容：
 
 ```text
 after_model
@@ -110,7 +156,7 @@ wrap_tool_call
 after_agent
 ```
 
-这就是"洋葱"的由来：请求向里走的时候，middleware 准备 state、messages 和 model request；模型返回之后，结果再向外走，依次经过策略、安全、工具执行和副作用处理。接下来，我们先走向内的半程。
+下面就从 run 的第一个阶段 `before_agent` 开始，走向内的半程。
 
 ## before_agent：run 的开场
 
@@ -186,7 +232,7 @@ Sandbox instance:
   provider 持有的真实执行对象
 ```
 
-工具里通过 `runtime.state["sandbox"]` 只能拿到类似 `{"sandbox_id": "..."}` 的状态；真正能执行命令、读写文件的，是 provider 根据这个 id 找回来的 sandbox 实例。这个分层很关键：state 里存身份，provider 管资源。
+工具里通过 `runtime.state["sandbox"]` 只能拿到类似 `{"sandbox_id": "..."}` 的状态；真正能执行命令、读写文件的，是 provider 根据这个 id 找回来的 sandbox 实例。
 
 **DynamicContext** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />。它把日期和记忆注入为隐藏的 `HumanMessage`，而不是去改 system prompt。
 
@@ -225,7 +271,9 @@ additional_kwargs:
 日期和记忆不是同一个可靠性等级。日期是廉价的本地事实，memory 可能涉及存储、分词和冷启动 IO。现在它们共用一个超时边界；3.0 可以把两者拆开，让 memory 超时不影响日期注入。
 </Design30>
 
-**Todo** 和 **LoopDetection** 在 `before_agent` 里只是做状态清理：Todo 清掉其他 run 遗留的 completion reminder；LoopDetection 初始化或重置本 run 的循环检测状态。它们不是这一阶段的主角，但属于完整 run 骨架的一部分。
+**Todo** 和 **LoopDetection** 在 `before_agent` 里不办正事，只负责"清场"。要看懂这一步，得先补一个容易忽略的前提：**middleware 实例是长期存活、被同一进程里多个 run 复用的**，并不是每个 run 新建一份。所以它们身上会留着上一个 run 的临时簿记——Todo 那边攒着一份"别让模型在任务没做完时就收尾"的提醒，LoopDetection 那边攒着一份重复调用的计数。这些都不该串进新的 run，于是两者在开场各自清零：Todo 清掉遗留的提醒，LoopDetection 重置循环检测状态。
+
+这两套机制本身留到后面（`before_model`、`wrap_model_call`）再细讲，这里它们做的只是每个 run 开场的"自检"——不起眼，但少了这一下，run 之间就会互相污染。
 
 ## before_model：每轮模型调用之前
 
