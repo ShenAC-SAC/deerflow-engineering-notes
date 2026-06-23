@@ -1,0 +1,258 @@
+---
+lang: zh
+slug: 05-middleware-return
+station: 5
+title: 中间件管线（下）：回答如何穿出洋葱
+sha: d2cc991d
+sourceRefs:
+  - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/packages/harness/deerflow/agents/middlewares/safety_finish_reason_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/loop_detection_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/title_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/todo_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/sandbox_audit_middleware.py
+  - backend/packages/harness/deerflow/guardrails/middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py
+  - backend/packages/harness/deerflow/sandbox/middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py
+  - backend/packages/harness/deerflow/agents/memory/queue.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import MentalModel from '../../../components/MentalModel.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+上一站，请求穿过 `before_agent`、`before_model`、`wrap_model_call` 三层，模型终于拿到整理好的 request，开口了。这一站接着走另一半：**模型的回答怎么一层层穿出洋葱。**
+
+向外这半程和向内不是镜像。向内做的是"准备"——把状态、消息、工具 schema 铺好；向外做的是"裁决和收尾"——这回答可信吗？要不要打断？工具能不能真执行？run 结束要收拾什么？这些都发生在模型开口之后。
+
+还记得上一站立的那条规则吗：先注册的是更靠外的洋葱皮，进来时外层先跑，出去时内层先跑。这一站正是它的下半句在起作用——模型一开口，**注册得越靠里的 middleware，越先看到回答**，也越先有机会改写它。
+
+<MentalModel>模型开口后，谁先看到回答谁就有权改写。</MentalModel>
+
+<FlowDiagram
+  caption="向外半程：模型返回后，after_model 逆序接管；若还要调用工具，每次工具执行都被 wrap_tool_call 包住；这一轮不再调用工具时，进入 after_agent 收尾。"
+  chart={`flowchart TD
+  MODEL["模型返回 AIMessage"] --> AM["after_model · 逆序接管回答"]
+  AM -->|带 tool_calls| WTC["wrap_tool_call · 包住每次工具执行"]
+  WTC --> TOOL["真正执行工具"]
+  TOOL -.->|结果回到模型 → 下一轮| MODEL
+  AM -->|无 tool_calls| AA["after_agent · run 收尾"]`}
+/>
+
+## after_model：逆序接管回答
+
+`after_model` 在模型每次返回后跑。它是回答向外走遇到的第一层 middleware——但"第一层"是按 run 的实际执行顺序说的，不是按 list 顺序。
+
+这里正好把上一站那条规则兑现成具体顺序。`after_model` 在回答**出去**时跑，而出去时内层先跑、内层又正是后注册的那些——所以 `after_model` 按**注册逆序**派发，注册得越靠后的越先跑。回到上一站那张 lead 专属段清单，把其中实现了 `after_model` 的几个挑出来，从上到下的注册顺序是：
+
+```text
+Todo → TokenUsage → Title → SubagentLimit → LoopDetection → SafetyFinishReason
+```
+
+逆过来，才是它们真正执行的顺序：
+
+```text
+SafetyFinishReason   先跑
+LoopDetection
+SubagentLimit
+Title
+TokenUsage
+Todo                 后跑
+```
+
+`SafetyFinishReasonMiddleware` 能排在最前不是巧合：它在 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="d2cc991d" symbol="build_middlewares" /> 里被**故意注册得靠后**（custom middleware 之后），注释写得很直白——就是为了在逆序派发里最先跑，赶在循环检测、子 agent 计数之前，把不可信的 `tool_calls` 清掉。下面按这个真实顺序走一遍。
+
+**SafetyFinishReason** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/safety_finish_reason_middleware.py" sha="d2cc991d" symbol="SafetyFinishReasonMiddleware" />。它不是安全分类器，不判断内容安不安全；它消费的是 provider 已经给出的停止信号：
+
+```text
+OpenAI 兼容:  finish_reason = content_filter
+Anthropic:    stop_reason = refusal
+Gemini:       finish_reason = SAFETY / BLOCKLIST / PROHIBITED_CONTENT / ...
+```
+
+当模型因为安全被截断、却又带着半截 `tool_calls` 时，问题就来了：LangGraph 只要看到 AIMessage 带非空 `tool_calls`，就会把它路由进工具节点。而被截断的 tool_call 可能只有半个参数——比如 `write_file` 的 `content` 写到一半。真去执行，就是拿残缺参数写文件。
+
+所以 SafetyFinishReason 在 `after_model` 里只做一件正事：发现"安全截断 + 非空 tool_calls"，就清空 `tool_calls`，补一段对用户可见的说明，顺便落一条可观测记录。它和上一站的 LLMErrorHandling 正好补成一对：
+
+```text
+LLMErrorHandling:    没拿到正常 AIMessage（provider 抛了异常）
+SafetyFinishReason:  拿到了正常 AIMessage，但它的 tool_calls 不可信
+```
+
+**LoopDetection** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/loop_detection_middleware.py" sha="d2cc991d" symbol="LoopDetectionMiddleware" />。它先得判定什么算"循环"，这有两层：
+
+```text
+第一层 · 同一个动作反复做
+  把每次 tool_call 归一成一个哈希（工具名 + 关键参数）
+  read_file 还会把相近的行号区间归到一起，免得错开几行就算两次不同调用
+  同一个哈希出现够多次 → 命中
+
+第二层 · 同一类动作做太多次
+  按工具名计数，比如 read_file 被连调几十次
+  哪怕每次读的是不同文件，也算一种打转 → 命中
+```
+
+命中之后分两挡处理，轻重不同。它的**硬刹车**在 `after_model` 这一层：一旦重复程度达到 hard limit，就直接改写当前 AIMessage——清掉 `tool_calls`、追加一段 `[FORCED STOP]` 文本、把 `finish_reason` 从 tool_calls 改成 stop。改完，这条消息就变成普通助手文本，图自然不会再路由进工具节点。
+
+但它的**软刹车**（warning）不在这里注入。原因和协议有关：`after_model` 紧跟在 `AIMessage(tool_calls)` 之后，此时对应的 ToolMessage 还没产生。如果现在就插一条警告，历史会变成：
+
+```text
+AIMessage(tool_calls=[call_1])
+HumanMessage(loop warning)     ← 夹在中间
+ToolMessage(tool_call_id=call_1)
+```
+
+很多 provider 不接受 tool 结果和它的 tool_call 之间夹别的消息。所以软 warning 先排队，等下一次 `wrap_model_call`（工具结果都回来之后）再注入——这也是上一站会在 `wrap_model_call` 里见到 LoopDetection 的原因。一个 middleware，两个 hook，各管刹车的一半。
+
+<Design30>
+循环控制天然需要软、硬两挡刹车：软刹车是请求级提醒，硬刹车是结构性改写 AIMessage。3.0 可以把这两种干预明确写进运行时契约（「下次模型调用前注入提醒」与「改写助手消息、清空 tool_calls」是两类不同动作），并产出结构化遥测——检测类型、涉及的工具、计数、阈值、最终动作，让 UI 和日志不必去解析告警文本。
+</Design30>
+
+**SubagentLimit** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py" sha="d2cc991d" symbol="SubagentLimitMiddleware" />。它只看最新那条 AIMessage（也就是模型刚生成的那条）：数一数里面有几个 `task` 工具调用，超过 `max_concurrent` 就把多出来的截掉，用**同一个 message id** 替换回去（同 id → reducer 原地替换，而不是追加一条）。只动最新这条、不碰历史，是因为历史里的 `task` 调用可能早就有对应的 ToolMessage 结果了，回头改它会破坏配对协议。它放在 `after_model`，正因为这是"模型刚生成的 tool_calls"第一次可见、又还没进工具节点执行的那个时刻——正好卡在中间。
+
+为什么不靠 prompt 让模型自己少开？因为资源上限不能只靠模型听话。这是 enforcement，不是建议。
+
+<Design30>
+2.x 把并发上限钳进 `[2, 4]`，于是"开启子 agent、但最多一个"这种配置根本表达不出来——能力开关（`subagent_enabled`）、`task` 工具注入、并发上限三件事是耦在一起的。3.0 可以把它们收成一条显式的 `SubagentPolicy`：是否可用、最多并发几个（允许 1）、超额了怎么办（截断 / 报错 / 让模型重排）。
+</Design30>
+
+**Title** 和 **TokenUsage** 是这一层的"旁路"：它们不碰控制流，只往消息上贴东西。Title（<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/title_middleware.py" sha="d2cc991d" symbol="TitleMiddleware" />）在第一轮完整对话之后生成标题——只读消息、写 `title` 字段，失败就退回一个本地标题，不拖累主 run。TokenUsage（<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py" sha="d2cc991d" symbol="TokenUsageMiddleware" />）把模型这一步的 token 用量、以及从 tool_calls 归类出的产品动作（todo_start、subagent、search……，给计费和分析用）标到 AIMessage 的 `additional_kwargs` 上。两者都用 `model_copy`（复制出一条新消息、只改要改的字段、保留原 id）写回，靠"同 id → reducer 原地替换"顶替原消息，而不是新增一条。
+
+**Todo** 在 `after_model` 这层负责"防过早收尾"：如果模型在 todo 还没做完时就给出干净的最终回答，Todo 会排一条 completion reminder，并返回 `{"jump_to": "model"}` 把控制流跳回模型；下一次 `wrap_model_call` 再把这条隐藏提醒注入 request。这条提醒**故意不写进 graph state**——它只是给下一次模型调用的控制提示，不该出现在用户可见的对话里。（Todo 的另外两个 hook 在上一站已经讲过，这里只补出向这一笔。）
+
+## wrap_tool_call：工具边界这层洋葱
+
+如果 `after_model` 之后这一轮还要调用工具（AIMessage 带 `tool_calls`），控制流就进入工具节点。每一次工具执行，都被 `wrap_tool_call` 包住——和 `wrap_model_call` 一样是洋葱，只是这回包的是工具，不是模型。
+
+handler 语义也一样：`handler(request)` 表示继续向内、最终执行真正的工具。在 handler **之前**，middleware 可以拦下不让执行（直接返回一个 ToolMessage 就短路了）；在 handler **之后**，可以加工工具的返回结果。
+
+按洋葱从外到内，这一层登场的 middleware 是：
+
+```text
+ToolOutputBudget   （最外）
+Sandbox
+Guardrail?
+SandboxAudit
+ToolErrorHandling
+DeferredToolFilter
+Clarification      （最内）
+```
+
+分成两类看更清楚：一类在 handler **之前**决定"这个工具到底让不让跑"，一类在 handler **之后**收拾结果。先看几道"让不让跑"的闸。
+
+**Clarification** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py" sha="d2cc991d" symbol="ClarificationMiddleware" />。`ask_clarification` 这个工具本体几乎是空的——真正的行为在 middleware 里。模型调用它时，`wrap_tool_call` 拦下，构造一条 ToolMessage，然后返回：
+
+```python
+Command(update={"messages": [tool_message]}, goto=END)
+```
+
+也就是把一次"提问"变成 run 级别的暂停：图直接走到 END，等用户回答。前端靠 `message.name == "ask_clarification"` 把它渲染成澄清卡片，而不是普通工具结果。
+
+这里有个容易误解的边界：`wrap_tool_call` 一次只看到**一个** tool_call。如果模型在同一条 AIMessage 里同时发了 `[普通工具, ask_clarification]`，Clarification 返回的 `goto=END` 并不能保证取消掉兄弟工具——在当前 LangGraph 版本里，同一条消息的多个工具调用会被一起执行（async 用 `asyncio.gather`）。"先澄清、且只澄清"是 prompt 在要求，不是 runtime 在保证。
+
+<Design30>
+`ask_clarification` 把三件事压进了一个工具：给模型的可选项、给前端的中断事件、给 runtime 的执行策略。其中"澄清要排他"目前只由 prompt 要求。3.0 可以把它升成一条 `ToolCallArbitrationPolicy`，在工具真正产生副作用之前、对整条 `tool_calls` 做仲裁（只留 clarification / 把兄弟调用换成结构化的策略拒绝 / 让模型重排）；同时保留模型在边界内的自主——问什么、给哪些选项，仍由模型决定。硬边界交给 runtime，软引导留给模型。
+</Design30>
+
+**DeferredToolFilter 的 tool 侧** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" symbol="DeferredToolFilterMiddleware" />。上一站讲过它的 model 侧：从 `request.tools` 里藏掉未 promoted 的 schema。但藏 schema 不够——模型可能从历史、prompt 泄漏或猜测里调到一个隐藏工具。所以它在 `wrap_tool_call` 这侧补上 enforcement：真调到隐藏工具，直接返回 `ToolMessage(status="error")`，不执行。两侧合起来才是 fail-closed（默认拒绝——两道关卡都堵死才算数）：model 侧管"看得见"，tool 侧管"跑得了"。（这条已经在上一站抽象成 `ToolVisibilityPolicy`，不重复。）
+
+**SandboxAudit** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/sandbox_audit_middleware.py" sha="d2cc991d" symbol="SandboxAuditMiddleware" />。它只管名字叫 `bash` 的工具调用：读出 `args["command"]`，做输入校验和风险分类，然后三选一：
+
+```text
+pass:   照常执行
+warn:   照常执行，但在结果里附一条警告
+block:  不调 handler，直接返回 error —— 命令根本不执行
+```
+
+关键安全性质就一句：**block 在 handler 之前返回**。因为真正的执行藏在 handler 链里，被 block 的命令永远到不了那一步。它不是完整沙箱，是一道 bash 命令策略闸；每条 bash 都会留一条 pass / warn / block 审计日志。
+
+**Guardrail**（可选）来自 <SourceRef file="backend/packages/harness/deerflow/guardrails/middleware.py" sha="d2cc991d" symbol="GuardrailMiddleware" />，配置了 provider 才装。它把工具调用（名字、参数、agent 身份）交给一个 `GuardrailProvider` 要 allow / deny：deny 就不调 handler、返回 error。它和静态的 `allowed_tools` 不是一回事——`allowed_tools` 决定"模型原则上能看到 / 用哪些工具"，Guardrail 决定"此刻这一次、带着这些参数的调用，允不允许"。典型企业用法：允许 `read_file` 但拒绝 `path=/secrets/*`，允许 `send_email` 但拒绝外部收件人。当前实现还只是个预留扩展点，真正价值要等接上企业策略 provider。
+
+再看 handler **之后**收拾结果的几层。
+
+**ToolErrorHandling** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="d2cc991d" symbol="ToolErrorHandlingMiddleware" />。它包在工具执行外面，把工具抛出的普通异常转成协议合法的结果：
+
+```python
+try:
+    result = handler(request)
+except GraphBubbleUp:
+    raise               # 控制流信号，原样抛出
+except Exception as exc:
+    return ToolMessage(status="error", ...)
+```
+
+`GraphBubbleUp` 那一支很关键：它是 LangGraph 的中断 / 暂停 / 恢复信号，不是工具失败。要是把它也吞成 error，就把控制流伪装成了业务失败。它还顺手把 `task`（子 agent 入口工具）的结果标准化：给 ToolMessage 贴上结构化的 `subagent_status`（completed / failed / timed_out），让前端不用去解析 "Task Succeeded" 这种字符串。
+
+<Design30>
+工具只该管业务，协议卫生该由执行边界统一兜。3.0 可以把工具结果显式分型：`success` / `tool_error` / `policy_denial` / `control_flow`——让"预期内的业务失败"、"未捕获的执行异常"、"运行时控制流"各归各位。尤其是控制流信号，永远不许被伪装成工具失败。
+</Design30>
+
+**Sandbox 的 wrap_tool_call 侧** 来自 <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="d2cc991d" symbol="SandboxMiddleware" />。上一站说过 sandbox 默认 lazy：`before_agent` 通常不 acquire，真正的 acquire 发生在第一次 sandbox 工具调用时。问题是，工具里直接改 `runtime.state["sandbox"]` 只是这次调用的局部修改，不会自动回写图状态。Sandbox 的 `wrap_tool_call` 就负责发现"这次调用里冒出了新的 `sandbox_id`"，把它包进 Command 一起提交回 graph state：
+
+```python
+Command(update={"sandbox": {"sandbox_id": sandbox_id}, "messages": [tool_message]})
+```
+
+这样 checkpoint / resume 才看得见这个 sandbox 身份。
+
+**ToolOutputBudget 的 tool 侧** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py" sha="d2cc991d" symbol="ToolOutputBudgetMiddleware" />。上一站讲的是它的 model 侧（把历史里的超大 ToolMessage 换成预览）。在 `wrap_tool_call` 这侧，它做的是源头治理：工具刚返回一个巨大的 ToolMessage，就在这里把完整内容写到 outputs 文件，只在消息里留 head/tail 预览和路径。注意它连 `Command.update` 里的 ToolMessage 也一并处理，免得大输出从 Command 路径绕过预算。
+
+## after_agent：run 收尾
+
+当这一轮不再有 `tool_calls`（模型给了最终回答），图就走向结束。`after_agent` 在整个 run 收尾时跑一次，做两件主要的事。
+
+**Memory** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py" sha="d2cc991d" symbol="MemoryMiddleware" />。它不直接写任何 ThreadState 字段，而是把这轮对话（用户输入、最终回答、纠正 / 强化信号）塞进一个全局的 <SourceRef file="backend/packages/harness/deerflow/agents/memory/queue.py" sha="d2cc991d" symbol="MemoryUpdateQueue" />。这个队列是**去抖（debounce）**的，不是普通 FIFO：同一个 `(thread, user, agent)` 在去抖窗口内只保留最新快照，并把"纠正 / 强化"这类是非标记合并起来。这样一个会话短时间内连跑好几轮，也只触发一次 memory 更新，而不是每轮都去打一次存储。慢活——真正的 memory 更新、模型调用、存储写入——都在锁外做，不卡 run 收尾。
+
+<Design30>
+现在的 memory 是"跑完之后"的对话记忆：用户输入 + 最终回答，异步入队、稍后落库。它不等于并行子 agent 需要的"共享实验记录"——A 发现的事实，B 不会实时看到。3.0 可以补一层 run / thread 作用域的结构化发现（带证据、带 scope、带失效条件），让隔离的子 agent 不必重复发现同一件事。这条更完整的展开，留到后面子 agent 那一站。
+</Design30>
+
+**Sandbox release** 也在 `after_agent`：sandbox 会调 `provider.release(sandbox_id)`。但 "release" 不等于"销毁"——`LocalSandboxProvider` 的 release 是 no-op（本地 per-thread sandbox 可复用），别的 provider 可能关客户端、把容器还进池、或真销毁。生命周期语义在 provider，不在这层 middleware，具体留到后面 sandbox 那一站再展开。
+
+此外，**Todo** 和 **LoopDetection** 也在 `after_agent` 做点清理：清掉本 run 遗留的 reminder / warning 簿记。它们是长生命周期的 middleware 实例，得自己擦干净跨 run 的残留，和上一站开场 `before_agent` 的清理正好对称。
+
+<Philosophy title="工程设计哲学">
+
+向外这半程，做的不是推理，而是**裁决和收尾**。模型一开口，DeerFlow 依次问：这回答可信吗（Safety）、是不是在原地打转（Loop）、并发开太多了吗（Subagent），然后才让工具真正执行；执行时再守住命令闸、协议和资源边界；最后把该记的记下、该放的放掉。
+
+这些全都没有进 graph node，而是靠 middleware 在"模型 ↔ 工具"主循环的外侧完成。好处和上一站一样：图保持干净。代价也一样，而且更尖锐：**执行顺序是隐式的**——`after_model` 逆序、`wrap_tool_call` 洋葱嵌套，谁先看到回答、谁能短路工具，全靠注册位置决定，没有类型系统替你把关。Safety 必须最先跑，所以它必须注册得最靠后——这种"为了先跑而放到最后"的反直觉，正是这套机制最容易被读错的地方。
+
+</Philosophy>
+
+<Tradeoff leftTitle="向外分层的好处" rightTitle="代价">
+  <Fragment slot="left">
+
+  - 安全、循环、并发、工具策略都是 enforcement，不靠模型听话
+  - 异常、协议修补、结果裁剪集中在执行边界，工具本身只管业务
+  - 主循环依旧是干净的 model ↔ tools
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - `after_model` 逆序 + `wrap_tool_call` 洋葱，执行顺序高度依赖注册位置
+  - 不少 middleware 状态在内存里（循环窗口、熔断、reminder 簿记），跨进程行为取决于 run 落在哪
+  - prompt 约定 ≠ runtime 保证：clarification 的"只澄清"在混合 tool_calls 下并不被强制
+
+  </Fragment>
+</Tradeoff>
+
+## 容易踩的坑
+
+- **`after_model` 是逆序的。** 想让某个 middleware 在出向最先跑，要把它注册得最靠后。Safety 就是这么排到最前的。
+- **警告不能在 `after_model` 直接插。** 在 tool_calls 之后、ToolMessage 之前插消息，会破坏 provider 的配对协议；软 warning 一律排队，等下次 `wrap_model_call` 再注入。
+- **`goto=END` 不一定取消兄弟工具。** 同一条 AIMessage 里的多个工具调用会被一起执行；clarification 的排他性是 prompt 在要求，不是图在保证。
+- **release ≠ 销毁。** 本地 sandbox 的 release 是 no-op、会被复用；真正的生命周期语义在 provider。
+- **hard stop 是结构性的。** 循环硬刹车不是"提醒模型停"，而是直接改写 AIMessage、清掉 tool_calls，让图没法再进工具节点。
+
+---
+
+两站合起来，一次 run 的中间件全貌就清楚了：请求向内穿过准备层，回答向外穿过裁决层。其中被反复点到、却一直没展开的，是 sandbox——它既是工具的执行环境，又牵着 acquire / persist / release 一整条生命周期。下一站就钻进 sandbox：local、container、Kubernetes 到底隔离了什么，又没隔离什么。

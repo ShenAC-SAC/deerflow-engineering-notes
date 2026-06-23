@@ -40,16 +40,19 @@ Published so far:
 2. **Lead-agent factory** — how runtime options become a compiled graph.
 3. **Tool assembly** — why the tool list is *computed*, not merely registered.
 4. **Middleware pipeline I** — the inbound half: how a dozen layers dress the request before the model ever speaks.
+5. **Middleware pipeline II** — the outbound half: how the answer is adjudicated, tools are gated, and the run is cleaned up.
 
-Planned stops: the middleware return trip, sandboxing, subagents, skills, and persistence.
+Planned stops: sandboxing, subagents, skills, and persistence.
 
 ## Source baseline
 
-Everything here is written against DeerFlow commit
-[`0fb18e36`](https://github.com/bytedance/deer-flow/commit/0fb18e36), dated **2026-06-09** —
-every source reference points there, so the prose matches the code as of that date. As
-DeerFlow moves on, outdated explanations get revised and re-pinned to a newer commit;
-this baseline is what makes that drift trackable.
+Each article pins its own DeerFlow commit in frontmatter, and every source reference is
+checked against that exact commit — so the prose always matches the code it points to.
+Stops 1–3 are written against [`0fb18e36`](https://github.com/bytedance/deer-flow/commit/0fb18e36)
+(dated **2026-06-09**); the middleware stops (4–5) are re-pinned to the newer
+[`d2cc991d`](https://github.com/bytedance/deer-flow/commit/d2cc991d). As DeerFlow moves on,
+outdated explanations get revised and re-pinned; per-article pinning is what makes that
+drift trackable.
 
 ## Repository layout
 

@@ -55,7 +55,7 @@ export const JOURNEY: Station[] = [
     },
   },
   {
-    station: 5, slug: '05-middleware-return', risk: 5, altitude: '架构', status: 'locked',
+    station: 5, slug: '05-middleware-return', risk: 5, altitude: '架构', status: 'published',
     title: { zh: '中间件管线(下)· 回答怎么穿出来', en: 'Middleware pipeline II · the return trip' },
     mentalModel: { zh: '模型开口后，谁先看到回答谁就有权改写', en: 'After it speaks, whoever sees the answer first gets to rewrite it' },
     teaser: {
