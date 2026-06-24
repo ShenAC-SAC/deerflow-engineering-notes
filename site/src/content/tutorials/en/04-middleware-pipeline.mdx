@@ -22,7 +22,6 @@ sourceRefs:
   - backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
-import MentalModel from '../../../components/MentalModel.astro';
 import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
@@ -32,8 +31,6 @@ import Design30 from '../../../components/Design30.astro';
 The first time you open `build_middlewares()`, it looks unremarkable — just a series of objects appended one after another to a list. But the *arrangement* of that list decides the runtime behavior of the entire run that follows. The user's prompt doesn't go straight to the model; it travels through layer after layer of middleware first. They prepare the thread's file paths, handle uploaded attachments, set up the sandbox's lifecycle, inject the date and memory, and patch the message protocol the provider expects — so that by the time the model is actually called, the request has already been shaped into what DeerFlow wants it to see.
 
 The last stop looked at how tools get collected and exposed. This one goes deeper: **how a single run crosses the middleware onion and finally reaches the model call.** The other half — how `after_model`, `wrap_tool_call`, and `after_agent` take the result back out in reverse order — is the next stop.
-
-<MentalModel>Middleware is not a pipeline — it's an onion wrapped around the execution boundary: outer layers fire first on the way in, inner layers fire first on the way out.</MentalModel>
 
 <FlowDiagram
   caption="The inbound half: a run enters and crosses before_agent, before_model, and wrap_model_call before reaching the model call."

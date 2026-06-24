@@ -22,7 +22,6 @@ sourceRefs:
   - backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
-import MentalModel from '../../../components/MentalModel.astro';
 import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
@@ -32,8 +31,6 @@ import Design30 from '../../../components/Design30.astro';
 你第一次点开 `build_middlewares()`，它看起来并不起眼——只是把一串对象依次 append 进一个 list。但这个 list 的排布，实际上决定了后面一整次 run 的运行时行为：用户的 prompt 不会直接送到模型手里，而是先穿过一层层 middleware。它们负责准备 thread 的文件路径、处理上传附件、建立 sandbox 的生命周期、注入日期和记忆、修补 provider 要求的消息协议——等到模型真正被调用的时候，request 已经被整理成 DeerFlow 期望的样子了。
 
 上一站我们看了工具是怎么被收集和暴露出去的。这一站继续往深处走：**一次 run 是怎么穿过 middleware 这层洋葱，最终抵达模型调用的。** 模型返回之后的那一半——`after_model`、`wrap_tool_call`、`after_agent` 怎么按逆序一层层接管结果——留给下一站。
-
-<MentalModel>Middleware 不是一条普通流水线，而是一颗包住执行边界的洋葱：请求进入时外层先执行，结果返回时内层先处理。</MentalModel>
 
 <FlowDiagram
   caption="向内半程：run 进入后，依次穿过 before_agent、before_model、wrap_model_call，最终抵达模型调用。"

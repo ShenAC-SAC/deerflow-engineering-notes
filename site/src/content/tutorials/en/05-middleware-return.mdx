@@ -23,7 +23,6 @@ sourceRefs:
   - backend/packages/harness/deerflow/agents/memory/queue.py
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
-import MentalModel from '../../../components/MentalModel.astro';
 import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
@@ -35,8 +34,6 @@ Last stop, the request crossed `before_agent`, `before_model`, and `wrap_model_c
 The way out is not a mirror of the way in. Inbound was *preparation* — laying out state, messages, tool schemas. Outbound is *adjudication and cleanup* — is this answer trustworthy? Should we interrupt? Can the tool actually run? What needs tidying when the run ends? All of it happens after the model speaks.
 
 Remember the rule from last stop: earlier-registered is an outer layer of the onion; on the way in, outer runs first; on the way out, inner runs first. This stop is where the second half of that rule earns its keep — once the model speaks, **the more inner a middleware is registered, the sooner it sees the answer**, and the sooner it gets to rewrite it.
-
-<MentalModel>After it speaks, whoever sees the answer first gets to rewrite it.</MentalModel>
 
 <FlowDiagram
   caption="The outbound half: after the model returns, after_model takes over in reverse order; if more tools are needed, each tool execution is wrapped by wrap_tool_call; when this turn calls no more tools, after_agent closes out the run."
@@ -79,9 +76,11 @@ Anthropic:          stop_reason = refusal
 Gemini:             finish_reason = SAFETY / BLOCKLIST / PROHIBITED_CONTENT / ...
 ```
 
+The field names and values differ per provider, so a `SafetyTerminationDetector` adapter normalizes them into one internal `SafetyTermination` (recording which detector fired, and the field and value it matched) — downstream logic never has to care which provider it was.
+
 The trouble starts when the model is safety-terminated yet still carries a half-formed `tool_calls`: LangGraph routes any AIMessage with non-empty `tool_calls` into the tools node. A truncated tool call may hold only half an argument — say a `write_file` whose `content` stops mid-stream. Executing it means writing a file with mangled arguments.
 
-So in `after_model`, SafetyFinishReason does one real thing: on "safety termination + non-empty tool_calls," it clears `tool_calls`, appends a user-visible explanation, and records an observability entry. It pairs cleanly with last stop's LLMErrorHandling:
+So in `after_model`, SafetyFinishReason does one real thing: on "safety termination + non-empty tool_calls," it clears `tool_calls`, appends a user-visible explanation, and lays down three observability signals at once — a `safety_termination` entry in this AIMessage's `additional_kwargs`, a live SSE event to the frontend so the UI can reconcile its state, and a persistent `middleware:safety_termination` audit record for later debugging. It pairs cleanly with last stop's LLMErrorHandling:
 
 ```text
 LLMErrorHandling:    never got a normal AIMessage (the provider raised)
@@ -93,16 +92,22 @@ SafetyFinishReason:  got a normal AIMessage, but its tool_calls aren't trustwort
 ```text
 Layer 1 · the same action over and over
   normalize each tool_call into a hash (tool name + key args)
-  read_file also buckets nearby line ranges together, so being off by a few lines
+  read_file buckets nearby line ranges together, so being off by a few lines
   doesn't count as two different calls
+  content-editing tools like write_file and str_replace use the full args instead,
+  so distinct edits aren't misread as repeats
+  a batch of tool_calls is sorted before hashing, so the hash is the same even if
+  the call order changes
   the same hash showing up enough times → hit
 
 Layer 2 · the same kind of action too many times
   count by tool name, e.g. read_file called dozens of times
   even on different files each time, that's a kind of spinning → hit
+  naturally high-frequency tools can raise or lower their threshold per tool name,
+  to avoid false positives
 ```
 
-Once it hits, there are two levels of response. Its **hard brake** lives in `after_model`: once the repetition reaches the hard limit, it rewrites the current AIMessage outright — clears `tool_calls`, appends a `[FORCED STOP]` line, and changes `finish_reason` from tool_calls to stop. After that, the message is ordinary assistant text, and the graph won't route into the tools node anymore.
+Once it hits, there are two levels of response. Its **hard brake** lives in `after_model`: once the repetition reaches the hard limit, it rewrites the current AIMessage outright — clears the structured `tool_calls`, wipes the raw tool-call payload in `additional_kwargs` too (last stop's DanglingToolCall noted that tool-call info can live in both places, so clearing only one isn't enough), appends a `[FORCED STOP]` line, and changes `finish_reason` from tool_calls to stop. After that, the message is ordinary assistant text, and the graph won't route into the tools node anymore.
 
 But its **soft brake** (the warning) is not injected here. The reason is protocol: `after_model` fires right after `AIMessage(tool_calls)`, before the matching ToolMessage exists. Inject a warning now and the history becomes:
 
@@ -126,7 +131,7 @@ Why not just prompt the model to launch fewer? Because a resource limit can't re
 2.x clamps the concurrency limit into `[2, 4]`, which makes "subagents enabled, but at most one at a time" impossible to express — the capability switch (`subagent_enabled`), the `task` tool injection, and the concurrency cap are tangled together. 3.0 could fold them into one explicit `SubagentPolicy`: whether it's available, how many may run concurrently (allow 1), and what happens on overflow (truncate / reject / ask the model to replan).
 </Design30>
 
-**Title** and **TokenUsage** are the "bypass" of this layer: they don't touch control flow, they just stamp things onto messages. Title (<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/title_middleware.py" sha="d2cc991d" symbol="TitleMiddleware" />) generates a thread title after the first complete exchange — reads messages, writes the `title` field, falls back to a local title on failure, and never drags the main run down. TokenUsage (<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py" sha="d2cc991d" symbol="TokenUsageMiddleware" />) stamps this step's token usage, plus the product-level actions classified from tool_calls (todo_start, subagent, search… — for billing and analytics), onto the AIMessage's `additional_kwargs`. Both write back with `model_copy` (make a new message, change only the fields that need changing, keep the original id), relying on "same id → the reducer replaces in place" to supersede the original rather than add a new message.
+**Title** and **TokenUsage** are the "bypass" of this layer: they don't touch control flow, they just stamp things onto messages. Title (<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/title_middleware.py" sha="d2cc991d" symbol="TitleMiddleware" />) generates a thread title after the first complete exchange — reads messages, writes the `title` field, falls back to a local title on failure, and never drags the main run down. TokenUsage (<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py" sha="d2cc991d" symbol="TokenUsageMiddleware" />) stamps this step's token usage, plus the product-level actions classified from tool_calls (todo_start, subagent, search… — for billing and analytics), onto the AIMessage's `additional_kwargs`. Both write back with `model_copy` (make a new message, change only the fields that need changing, keep the original id), relying on "same id → the reducer replaces in place" to supersede the original rather than add a new message. TokenUsage also folds subagent usage back in: the `task` tool caches the token usage of the subagent it dispatched, keyed by `tool_call_id`; when TokenUsage sees the matching ToolMessage, it `pop`s that cached value by id and merges it into the dispatching AIMessage — `pop` so it's read-once-and-removed, so the same usage isn't counted twice.
 
 **Todo** in `after_model` does "premature-exit prevention": if the model produces a clean final answer while todos are still incomplete, Todo queues a completion reminder and returns `{"jump_to": "model"}` to bounce control back to the model; the next `wrap_model_call` then injects that hidden reminder into the request. The reminder is **deliberately not written into graph state** — it's a control prompt for the next model call, not part of the user-visible conversation. (Todo's other two hooks were covered last stop; this is just the outbound piece.)
 
@@ -160,21 +165,26 @@ That turns a "question" into a run-level pause: the graph goes straight to END a
 
 Here's an easily-misread boundary: `wrap_tool_call` sees only **one** tool call at a time. If the model emits `[a normal tool, ask_clarification]` in the same AIMessage, the `goto=END` that Clarification returns does *not* guarantee the sibling tool is cancelled — in the current LangGraph version, multiple tool calls from one message run together (async uses `asyncio.gather`). "Clarify first, and only clarify" is what the prompt asks for, not what the runtime guarantees.
 
+So once that turn's tools have run, what actually decides END vs. back-to-the-model isn't the `goto=END` line — it's a rule on `create_agent`'s "tools → model" edge: **it only goes to END when every client-side tool that ran this turn is `return_direct`.** `ask_clarification` is `return_direct=True`, so when it's the only call, the whole run stops cleanly and waits for the user. But mix in one ordinary tool and "all return_direct" no longer holds, so the graph carries both tools' results back to the model — and the clarification didn't really hold anything back. There's a subtler constraint too: `ask_clarification`'s question and options are generated *before* that turn's tools run, so it can't ask anything that depends on the sibling tool's return value — those results can't matter until the next turn back at the model.
+
 <Design30>
 `ask_clarification` presses three things into one tool: an affordance for the model, an interrupt event for the frontend, and an execution policy for the runtime. The "clarification must be exclusive" part is currently only prompt-enforced. 3.0 could lift it into a `ToolCallArbitrationPolicy` that arbitrates the whole `tool_calls` list before any side effects run (keep only clarification / replace siblings with a structured policy denial / ask the model to replan), while preserving the model's autonomy inside the boundary — what to ask and which options to offer stay the model's call. Hard boundary to the runtime, soft guidance to the model.
 </Design30>
 
 **DeferredToolFilter's tool side** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" symbol="DeferredToolFilterMiddleware" />. Last stop covered its model side: filtering unpromoted schemas out of `request.tools`. But hiding a schema isn't enough — the model may still call a hidden tool from history, a prompt leak, or a guess. So on the `wrap_tool_call` side it adds enforcement: if a hidden tool is actually called, it returns `ToolMessage(status="error")` and doesn't execute. The two sides together are fail-closed (deny by default — it only holds when both gates are shut): the model side controls what's *visible*, the tool side controls what can *run*. (Last stop already abstracted this into a `ToolVisibilityPolicy`, so no repeat here.)
 
-**SandboxAudit** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/sandbox_audit_middleware.py" sha="d2cc991d" symbol="SandboxAuditMiddleware" />. It only handles tool calls named `bash`: read `args["command"]`, validate the input, classify the risk, then pick one of three:
+**SandboxAudit** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/sandbox_audit_middleware.py" sha="d2cc991d" symbol="SandboxAuditMiddleware" />. It only handles tool calls named `bash`: read `args["command"]`, validate the input first, then grade the risk with regex / shlex, and pick one of three:
 
 ```text
-pass:   run as usual
-warn:   run as usual, but append a warning to the result
-block:  don't call handler, return an error — the command never runs
+pass:   everything else — run as usual
+warn:   matches a medium-risk pattern (pip install, apt install, chmod 777,
+        sudo/su, PATH=…) — run as usual, but append a warning to the result
+block:  empty / too long / contains a null byte, or matches a high-risk pattern
+        (rm -rf /, dd if=, mkfs, curl | bash, /dev/tcp, fork bomb…)
+        — don't call handler, return an error, the command never runs
 ```
 
-The key safety property is one line: **block returns before handler.** Because the real execution lives inside the handler chain, a blocked command never reaches it. This isn't a full sandbox; it's a bash command policy gate, and every bash call leaves a pass / warn / block audit log.
+The key safety property is one line: **block returns before handler.** Because the real execution lives inside the handler chain, a blocked command never reaches it. This isn't a full sandbox; it's a bash command policy gate, and every bash call — whatever the verdict — leaves an audit log carrying the timestamp, thread_id, command, and verdict (pass / warn / block).
 
 **Guardrail** (optional) comes from <SourceRef file="backend/packages/harness/deerflow/guardrails/middleware.py" sha="d2cc991d" symbol="GuardrailMiddleware" />, installed only when a provider is configured. It hands the tool call (name, arguments, agent identity) to a `GuardrailProvider` for an allow / deny decision: deny skips `handler` and returns an error. It's not the same as static `allowed_tools` — `allowed_tools` decides "which tools the model can see/use in principle," Guardrail decides "this concrete call, with these arguments, right now." Typical enterprise use: allow `read_file` but deny `path=/secrets/*`, allow `send_email` but deny external recipients. Today it's still a reserved extension point; the real value waits on a real enterprise policy provider.
 
@@ -191,6 +201,8 @@ except Exception as exc:
     return ToolMessage(status="error", ...)
 ```
 
+Why bother appending a `status="error"` ToolMessage at all, instead of letting the exception propagate? Two reasons. One is protocol: the provider requires every `AIMessage(tool_calls)` to have a matching ToolMessage. The other is resume hygiene — if a checkpoint holds a tool_call with no result, on resume you can't tell whether it never ran, failed, or lost its result; an explicit error result makes the state self-consistent, and the next model turn can recover from it.
+
 The `GraphBubbleUp` branch matters: it's LangGraph's interrupt / pause / resume signal, not a tool failure. Swallow it into an error and you've disguised control flow as a business failure. It also normalizes `task` (the subagent-entry tool) results, stamping a structured `subagent_status` (completed / failed / timed_out) onto the ToolMessage so the frontend doesn't have to parse strings like "Task Succeeded."
 
 <Design30>
@@ -205,13 +217,25 @@ Command(update={"sandbox": {"sandbox_id": sandbox_id}, "messages": [tool_message
 
 That's how checkpoint / resume can see the sandbox identity.
 
-**ToolOutputBudget's tool side** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py" sha="d2cc991d" symbol="ToolOutputBudgetMiddleware" />. Last stop covered its model side (swapping oversized historical ToolMessages for a preview). On the `wrap_tool_call` side it does source control: the moment a tool returns a huge ToolMessage, it writes the full content to an outputs file and leaves only a head/tail preview plus the path in the message. Note it also handles ToolMessages inside `Command.update`, so a large output can't slip past the budget through the Command path.
+**ToolOutputBudget's tool side** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py" sha="d2cc991d" symbol="ToolOutputBudgetMiddleware" />. Last stop covered its model side (swapping oversized historical ToolMessages for a preview). On the `wrap_tool_call` side it does source control. First, be precise about what it governs: the size of `ToolMessage.content`, not disk-file size — if a tool writes a big file but only returns "wrote it," there's nothing to budget; what it targets is a tool stuffing a big log, HTML page, or grep result straight into `ToolMessage.content`. When it spots one, it externalizes the full content to a file and leaves only a head/tail preview plus the path in the message.
+
+Where that file lands depends on whether this call has a sandbox, and whether the sandbox mounts the thread directory:
+
+```text
+no sandbox                              → write to the host's outputs dir
+sandbox that mounts the thread dir      → also the host's outputs (the sandbox sees it
+                                          through the same virtual path)
+sandbox without the thread dir mounted  → write straight into the sandbox via
+                                          sandbox.write_file
+```
+
+(It reads the capability flag the provider reports, rather than guessing from the provider's name.) Note it also handles ToolMessages inside `Command.update`, so a large output can't slip past the budget through the Command path.
 
 ## after_agent: closing out the run
 
 When this turn no longer has `tool_calls` (the model gave a final answer), the graph heads for the end. `after_agent` runs once as the whole run wraps up, and does two main things.
 
-**Memory** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py" sha="d2cc991d" symbol="MemoryMiddleware" />. It writes no ThreadState field directly; instead it pushes this turn's conversation (user input, final answer, correction / reinforcement signals) into a global <SourceRef file="backend/packages/harness/deerflow/agents/memory/queue.py" sha="d2cc991d" symbol="MemoryUpdateQueue" />. That queue is **debounced**, not a plain FIFO: for the same `(thread, user, agent)` within the debounce window it keeps only the latest snapshot and merges the yes/no flags like "correction / reinforcement." So a session firing several runs in quick succession triggers just one memory update, instead of hitting storage every turn. The slow work — the actual memory update, model calls, storage writes — happens outside the lock, so it doesn't stall the run's close-out.
+**Memory** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py" sha="d2cc991d" symbol="MemoryMiddleware" />. It writes no ThreadState field directly; instead it pushes this turn's conversation (user input, final answer, correction / reinforcement signals) into a global <SourceRef file="backend/packages/harness/deerflow/agents/memory/queue.py" sha="d2cc991d" symbol="MemoryUpdateQueue" />. That queue is **debounced**, not a plain FIFO: for the same `(thread, user, agent)` within the debounce window it keeps only the latest snapshot and merges the yes/no flags like "correction / reinforcement." So a session firing several runs in quick succession triggers just one memory update, instead of hitting storage every turn. Internally it uses two locks: one guards creation of the global singleton queue, the other guards a single queue's enqueue / timer / processing state; the slow work — the actual memory update, model calls, storage writes — happens outside the locks, so it doesn't stall the run's close-out.
 
 <Design30>
 Today's memory is "after the run" conversation memory: user input + final answer, queued asynchronously and persisted later. It isn't the "shared lab notebook" that parallel subagents need — a fact A discovered isn't visible to B in real time. 3.0 could add a run/thread-scoped layer of structured findings (with evidence, scope, and invalidation conditions), so isolated subagents don't keep rediscovering the same fact. The fuller treatment belongs to the subagent stop ahead.
