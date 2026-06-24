@@ -76,7 +76,6 @@ lead-only segment (?-marked layers are conditional)
   DeferredToolFilter? hide unpromoted deferred tool schemas, reject illegal calls
   SubagentLimit?      cap parallel task/subagent count
   LoopDetection?      detect and break repetitive tool-call loops
-  (custom middleware)
   SafetyFinishReason? clear untrustworthy tool_calls after a provider safety stop
   Clarification       turn ask_clarification into a run-level pause, always last
 ```
@@ -573,7 +572,7 @@ DeerFlow doesn't push this cross-cutting logic into the graph nodes; it puts it 
   </Fragment>
 </Tradeoff>
 
-## Easy traps
+## Easy-to-misread points
 
 - **`before_agent` doesn't run every turn — it runs once for the whole run.** Things that must happen every turn (summaries, todo reminders, image injection) belong on `before_model`; put them on the wrong hook and the logic either fires once or runs needlessly many times.
 - **"Middleware registered" ≠ "resource already created."** Lazy by default: `ThreadData` only computes paths (no directories), and `Sandbox` doesn't acquire in `before_agent` at all — the resource only shows up on first real use.

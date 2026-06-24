@@ -59,7 +59,7 @@ export const JOURNEY: Station[] = [
     title: { zh: '中间件管线(下)· 回答怎么穿出洋葱', en: 'Middleware pipeline II · outbound through the onion' },
     mentalModel: { zh: '模型给出回答后，谁先看到，谁就有权改写', en: 'After it speaks, whoever sees the answer first gets to rewrite it' },
     teaser: {
-      zh: '模型开口之后，洋葱开始向外走：安全、循环、子 agent、工具边界、副作用，逆序登场，各有改写权。',
+      zh: '模型给出回答之后，洋葱开始向外走：安全、循环、子 agent、工具边界、副作用，逆序登场，各有改写权。',
       en: 'Once the model speaks, the onion unwinds outward: safety, loops, subagents, tool boundaries, side effects — in reverse order, each with a say.',
     },
   },
