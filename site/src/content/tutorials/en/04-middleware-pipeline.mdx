@@ -87,17 +87,17 @@ Two things are worth pinning down before reading on.
 
 **First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't decorative — it documents real data dependencies the type system can't express: `ThreadData` computes the workspace / uploads / outputs paths first, and both `Uploads` (which scans the uploads path for files) and `Sandbox` (whose mounts use those paths) need them, so both must come after `ThreadData`; and `Clarification` has to intercept `ask_clarification` and turn it into a run-level pause before the tool actually runs, so it sits at the innermost edge of the tool boundary and is always registered last. Changing the order changes behavior, and no compile-time check will warn you that you got it wrong.
 
-**Second, registration order is not each hook's execution order.** One middleware can attach to several hooks, and different hooks dispatch in different directions — some forward, some reverse. This is the foundation for everything that follows, so the next section turns the onion over slowly.
+**Second, registration order is not each hook's execution order.** One middleware can attach to several hooks, and different hooks dispatch in different directions — some forward, some reverse. This is the foundation for everything that follows; the next section explains it in detail.
 
 <MarginNote>Same code, different run, different chain. Plan mode, the vision model, tool_search, the subagent switch, the guardrail config — each changes which middleware actually get assembled.</MarginNote>
 
-## Registration order ≠ execution order
+## How registration order and execution order relate
 
-This is the chapter's easiest place to get lost, and the mental model you most need to lock in first. Remember one sentence; the rest follows from it:
+This is the chapter's easiest place to get lost. Remember one sentence first:
 
 > **A middleware registered earlier is an outer layer of the onion.**
 
-One middleware can attach to several hooks (`before_model`, `after_model`, `wrap_model_call`, …). They share one registration order, but they are **dispatched in different directions**. Picture the onion and it all falls out:
+One middleware can attach to several hooks (`before_model`, `after_model`, `wrap_model_call`, …). They share one registration order, but they are **dispatched in different directions**. The onion model makes it clearer:
 
 ```text
 a request on the way IN,   crosses the outer skin first   → earlier-registered runs first
@@ -121,7 +121,7 @@ after_model  (answer going out):    model ──▶ B ──▶ A
 
 A and B's order is **completely reversed**: A first on the way in, B first on the way out. So "A is above B in the list" tells you nothing about "A runs first" — you have to ask which hook.
 
-`wrap_model_call` presses "in" and "out" into one function, where the onion is clearest. Same A and B:
+`wrap_model_call` presses "in" and "out" into one function. Same A and B again:
 
 ```text
 in  →  A takes the request, tweaks it, calls handler
@@ -131,15 +131,37 @@ in  →  A takes the request, tweaks it, calls handler
 out ←  A handles the response last
 ```
 
-A is the skin: **first** to touch the request, **last** to touch the answer; B is inner: last to touch the request, first to touch the answer. That's exactly what the mental-model card means — **outer in first, inner out first**.
+A is the skin: **first** to touch the request, **last** to touch the answer; B is inner: last to touch the request, first to touch the answer.
 
-The source has a ready proof. `SafetyFinishReasonMiddleware` (covered next stop) is deliberately registered **late** (inner); its comment spells out why: so that in `after_model`'s reverse dispatch it runs **first**, clearing the provider's untrustworthy safety-terminated `tool_calls` ahead of loop detection and subagent accounting. Registered inner → runs first on the way out — right on the rule above.
+The next stop's `SafetyFinishReasonMiddleware` is deliberately registered **late** (inner); its comment spells out why: so that in `after_model`'s reverse dispatch it runs **first**, clearing the provider's untrustworthy safety-terminated `tool_calls` ahead of loop detection and subagent accounting. Registered inner → runs first on the way out.
 
-So this chapter **doesn't read the list top to bottom**; it walks the run's lifecycle: the request goes inward layer by layer (`before_agent` → `before_model` → `wrap_model_call`) to the model, then the answer comes back out layer by layer. Each middleware is covered in the phase where it acts — so the order you read is the order things actually happen at runtime.
+So this chapter **doesn't read the list top to bottom**; it walks the run's lifecycle: the request goes inward layer by layer (`before_agent` → `before_model` → `wrap_model_call`) to the model, then the answer comes back out layer by layer. That way the order you read is the order things actually happen at runtime.
+
+## Where does a middleware's output go?
+
+Beyond order, reading middleware means watching a second axis: **where each middleware's output actually goes.** You'll keep running into two phrasings later — "written back to graph state" and "only changes this request, not state" — so let's pin the line between them now, once.
+
+Graph state (`ThreadState`) is a blackboard that is **checkpointed and persisted, survives across turns, and is shared by every middleware and tool.** Whether something belongs there comes down to three questions:
+
+```text
+must it survive across turns / across resume?   it gets checkpointed and restored
+must another middleware or tool see it?          state is the shared blackboard
+must it merge by the field's reducer?            how do repeated updates combine
+```
+
+If the answer to all three is no, keep it out of state — it goes to one of three other places instead:
+
+```text
+overrides just this model request  →  turn-local, gone next turn (skill body, the various reminders)
+kept in the middleware instance     →  process-level runtime control (loop counters, breaker state)
+sent outside                        →  a side effect (memory queue, audit logs, SSE events)
+```
+
+One key intuition: **what belongs in state is decided by "is it still needed after a pause, or does someone else have to see it" — not by "is it important."** A fleeting loop warning matters, but it must never be checkpointed and restored on resume. Carry that ruler down the page and you can judge, for each middleware, whether it writes state or not.
 
 ## The three hooks this part covers
 
-Reading it this way, the inbound half meets three kinds of hook. This table is the map for the sections below — each middleware is covered in the phase where it shows up:
+This table is the map for the sections below — each middleware is covered in the phase where it shows up:
 
 | Hook | When | Times per run | Covered here |
 | --- | --- | --- | --- |
@@ -159,7 +181,7 @@ From here we start at the run's first phase, `before_agent`, and walk the inboun
 
 ## before_agent: the run's opening
 
-`before_agent` runs once, when the agent graph is entered. It handles run-level preparation: settle paths, surface uploaded files, set up the sandbox lifecycle, inject this turn's context, or clean up per-run state.
+`before_agent` runs once, when the agent graph is entered. It handles run-level preparation: settle paths, surface uploaded files, set up the sandbox lifecycle, inject the date and memory, or clean up state left over from the previous run.
 
 The full cast at this layer:
 
@@ -180,7 +202,7 @@ uploads_path
 outputs_path
 ```
 
-To be precise: with the default `lazy_init=True`, it mostly **computes and writes the paths** — it doesn't necessarily create the directories right away. Only `lazy_init=False` eagerly creates them. In other words, `ThreadDataMiddleware` isn't a "filesystem tool" — it's more like a coordinate system for the middleware and tools that follow: where this thread's files should go.
+With the default `lazy_init=True`, it mostly **computes and writes the paths** — it doesn't necessarily create the directories right away. Only `lazy_init=False` eagerly creates them. In other words, `ThreadDataMiddleware` isn't a "filesystem tool" — it's more like a coordinate system for the middleware and tools that follow: where this thread's files should go.
 
 It also stamps `run_id` and a timestamp onto the latest user message, so the frontend or runtime can identify this turn's input. That move quietly reveals an easily-missed fact: middleware can rewrite message objects right at the run's opening — it doesn't have to wait until just before the model call.
 
@@ -203,9 +225,9 @@ what the frontend needs:
 
 So Uploads doesn't put entire file contents into the prompt — it tells the model "which files exist, where they are, what type, roughly what's in them." If the model truly needs the full content, it reads it later through a file tool.
 
-**Sandbox** comes from <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="d2cc991d" symbol="SandboxMiddleware" />. This is the easiest one to get wrong: it too defaults to `lazy_init=True`. So `before_agent` usually does *not* acquire a sandbox on the spot; the real acquire may happen on the first sandbox-tool call.
+**Sandbox** comes from <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="d2cc991d" symbol="SandboxMiddleware" />. It defaults to `lazy_init=True`. So `before_agent` usually does *not* acquire a sandbox on the spot; the real acquire happens on the first sandbox-tool call.
 
-A more accurate description of this layer: it establishes the sandbox's lifecycle and state contract.
+This layer's job is to establish the sandbox's lifecycle and state contract.
 
 ```text
 state["sandbox"] holds the sandbox_id
@@ -221,7 +243,7 @@ ThreadData → which thread a file path belongs to
 Sandbox    → which execution environment a tool command runs in
 ```
 
-The concrete isolation boundaries of local / container / Kubernetes / AIO sandboxes are for the later sandbox chapter. Here, anchor one key distinction:
+The concrete isolation boundaries of local / container / Kubernetes / AIO sandboxes are for the later sandbox chapter. Here, one key distinction:
 
 ```text
 sandbox_id:
@@ -235,7 +257,7 @@ Inside a tool, `runtime.state["sandbox"]` only gives you something like `{"sandb
 
 **DynamicContext** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />. It injects the date and memory as a hidden `HumanMessage` rather than editing the system prompt.
 
-The reason for not touching the system prompt is straightforward: the prefix cache. Providers cache the computed result of a stable prompt prefix and reuse it next time the same prefix shows up — saving both time and money; but change a single character of that prefix and the cache is void, recomputed from scratch. Dynamic content like the date and memory, which can change every turn, would keep busting that cache if it lived in the system prompt — so it has to ride the message stream (go into the message list) and leave the system prompt unchanged.
+The reason for not changing the system prompt: the prefix cache. Model providers cache the computed result of a stable prompt prefix and reuse it next time the same prefix shows up — saving both time and money; but change a single character of that prefix and the cache is void, recomputed from scratch. Dynamic content like the date and memory, which can change every turn, would keep busting that cache if it lived in the system prompt — so it has to ride the message stream (go into the message list) and leave the system prompt unchanged.
 
 So how do you slip a reminder **ahead of** the user's question without dirtying the original text? DynamicContext uses an **ID-swap**. One premise first: LangGraph's message reducer has a rule — a new message whose id matches an existing one **replaces it in place**; a different id **appends**. DynamicContext leans on that, giving the reminder the original user message's id and re-homing the real user text to a derived id `{original-id}__user`:
 
@@ -283,9 +305,9 @@ So "model-visible" and "frontend-visible" are not the same thing. The model can 
 Date and memory are not the same reliability class. The date is a cheap local fact; memory may involve storage, tokenization, and cold-start I/O. Today they share one timeout boundary; 3.0 could split them, so a memory timeout doesn't take date injection down with it.
 </Design30>
 
-**Todo** and **LoopDetection** do no real work in `before_agent` — just "clearing the stage." To make sense of this step you need one easily-missed premise: **middleware instances are long-lived and reused across many runs in the same process**, not created fresh per run. So they carry leftover bookkeeping from the previous run — Todo holds a queued "don't let the model wrap up while the task is unfinished" reminder, LoopDetection holds a repeat-call counter. None of that should bleed into the new run, so each resets at the start: Todo clears leftover reminders, LoopDetection resets its loop-detection state.
+**Todo** and **LoopDetection** only "clear the stage" in `before_agent`. One easily-missed premise first: **middleware instances are long-lived and reused across many runs in the same process**, not created fresh per run. So they carry leftover bookkeeping from the previous run — Todo holds a queued "don't let the model wrap up while the task is unfinished" reminder, LoopDetection holds a repeat-call counter. None of that should enter the new run, so each resets at the start: Todo clears leftover reminders, LoopDetection resets its loop-detection state.
 
-Both mechanisms themselves are explained later (`before_model`, `wrap_model_call`); here all they do is a per-run "self-check" at startup — unglamorous, but skip it and runs start contaminating each other.
+Both mechanisms are explained later (`before_model`, `wrap_model_call`); here all they do is a per-run "self-check" at startup — skip it and runs start contaminating each other.
 
 ## before_model: before each model call
 
@@ -316,7 +338,7 @@ ViewImage
 }
 ```
 
-`RemoveMessage(REMOVE_ALL_MESSAGES)` is the signal to "drop every existing message," followed by the freshly written summary and preserved window — so this is a **wholesale replacement**, not an append at the end.
+`RemoveMessage(REMOVE_ALL_MESSAGES)` "drops every existing message," followed by the freshly generated summary and the preserved original messages — so this is a **wholesale replacement**, not an append at the end.
 
 The summary itself is a `HumanMessage(name="summary")`. The `HumanMessage` role lets the model read it as background; `name="summary"` tells the runtime and middleware it isn't real user input — so later middleware won't treat the summary as a user prompt and parse slash commands or inject context against it.
 
@@ -335,7 +357,7 @@ preserve_recent_skill_tokens_per_skill:
   per-skill token cap
 ```
 
-This keeps summarization from being defeated by rescuing "all the old skill content at once." The design judgment behind it: old messages aren't all disposable, and recent messages aren't always enough; what matters is whether this content still carries an active execution constraint.
+This keeps summarization from being defeated by rescuing "all the old skill content at once." The design judgment behind it: it doesn't actually understand the content — it bets that "a skill file read in recently is probably still the instruction to follow right now," so it keeps verbatim only the most recent `/mnt/skills` reads in the to-summarize region that fit the budget, and summarizes the rest as usual.
 
 <Design30>
 Summarization is not "generic compression" — it's "selective loss." Ordinary chat can be summarized; still-active instructions, schemas, tool results, and constraints are closer to executable context. 3.0 could first extract typed context items, then decide per item whether to keep raw, summarize, externalize, or move to long-term memory by retention value.
@@ -345,7 +367,7 @@ Summarization is not "generic compression" — it's "selective loss." Ordinary c
 
 The essence here: `state["todos"]` is still alive, but the message history the model can see no longer shows where the todos came from. The runtime knows the task isn't done, yet the model might think it can wrap up. What TodoMiddleware does is turn task state that "the runtime still remembers but the message window has lost" back into a reminder the model can see.
 
-Note the similarity and difference with DynamicContext:
+The difference from DynamicContext:
 
 ```text
 DynamicContext:
@@ -379,7 +401,7 @@ ViewImage exposes a general problem: don't equate "the last HumanMessage" with "
 
 `wrap_model_call` is the innermost layer, closest to the model provider. It receives a `handler`, and `handler(request)` means "keep going inward and eventually call the real model." You can change the request before calling `handler`; you can process the response after `handler` returns; and if `handler` raises, you enter the exception path.
 
-This layer involves more middleware than it looks:
+The middleware involved at this layer:
 
 ```text
 ToolOutputBudget(model side)
@@ -456,7 +478,7 @@ Note it patches *this* `ModelRequest`, not graph state directly:
 request.override(messages=patched)
 ```
 
-That's exactly why it chooses `wrap_model_call` over `before_model`: the patch has to be inserted right after the corresponding AIMessage, not simply appended to the end.
+That's exactly why it chooses `wrap_model_call` over `before_model`: the ToolMessage has to be inserted right after the corresponding AIMessage, not simply appended to the end.
 
 **LLMErrorHandling** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py" sha="d2cc991d" />. It guards the model-provider boundary: timeouts, connection failures, 5xx, 429, quota/auth — all classified and handled here. Retriable transient/busy errors back off and retry; non-retriable or retry-exhausted ones return a fallback `AIMessage`.
 
@@ -472,11 +494,11 @@ half_open  recovery probe, lets one call test whether the provider recovered
 
 Note that `closed` here is the healthy state, not "requests closed off" — that's the standard circuit-breaker term, not DeerFlow inverting it. Another key point: `GraphBubbleUp` must be re-raised as-is, because it represents LangGraph's interrupt/pause/resume control flow, not an ordinary exception — it can't be swallowed as a provider error.
 
-**LoopDetection** in `wrap_model_call` mainly injects a soft warning: if the previous `after_model` judged a loop risk but it hasn't reached a hard stop, it slips a reminder into the next model request. It doesn't inject straight from `after_model` because that would break the AIMessage(tool_calls) → ToolMessage pairing — the warning has to wait until the tool results are all back.
+**LoopDetection** is one middleware holding two brakes: the **hard** one — when repetition hits the limit it rewrites the AIMessage the model just produced, clears `tool_calls`, and forces a stop — lives in `after_model` and is left for the next stop; here in `wrap_model_call` it only handles the **soft** one. The soft brake works like this: the previous `after_model` spotted the start of a loop but it hadn't reached the hard stop line, so it queued a reminder; once this turn's tool results are all back, that reminder is appended as a fresh `HumanMessage` at the end of the model request. It isn't injected straight from `after_model` because that would wedge it between an `AIMessage(tool_calls)` and its paired `ToolMessage`, breaking the pairing protocol — so the warning has to wait until the tool results are back.
 
-**SkillActivation** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />. When the user starts with `/skill-name`, it reads the full `SKILL.md` and injects a hidden `HumanMessage` into this call's request. Note it **doesn't write back to graph state**; it only changes the request sent this one time — that is, it's a **turn-local (scoped to just this turn) request overlay (it covers only this request and is gone next turn)**. This way a skill enters the context only when explicitly activated, instead of polluting the prompt every turn.
+**SkillActivation** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />. When the user starts with `/skill-name`, it reads the full `SKILL.md` and injects a hidden `HumanMessage` into this call's request. Note it **doesn't write back to graph state**; it only changes the request sent this one time — that is, it's a **turn-local (scoped to just this turn) request overlay (it covers only this request and is gone next turn)**. This way a skill enters the context only when explicitly activated, instead of polluting the context every turn.
 
-Its difference from DynamicContext is worth pulling out:
+The difference from DynamicContext:
 
 ```text
 DynamicContext:
@@ -553,11 +575,11 @@ DeerFlow doesn't push this cross-cutting logic into the graph nodes; it puts it 
 
 ## Easy traps
 
-- **`before_agent` runs once; `before_model` runs every turn.** Paths, uploads, and the sandbox lifecycle are run-level prep; summaries, todo reminders, and image injection ride each model call.
-- **Default lazy init runs counter to intuition.** `ThreadData` only computes paths by default, and `Sandbox` doesn't acquire on the spot in before_agent. Don't read "middleware registered" as "resource already created."
-- **The chain is assembled conditionally.** Plan mode, the vision model, tool_search, the subagent switch, the guardrail provider — all change the actual middleware list. Before debugging, confirm: is this middleware even in *this* run?
-- **`wrap_model_call` ≠ `before_model`.** DanglingToolCall must insert its patch at the right position in history, so it can only edit this request; `before_model` is better suited to returning a graph-state update.
-- **The system prompt is kept stable on purpose.** Date, memory, skill, todo, images — this dynamic info all rides the message / request overlay. Don't casually edit the system prompt.
+- **`before_agent` doesn't run every turn — it runs once for the whole run.** Things that must happen every turn (summaries, todo reminders, image injection) belong on `before_model`; put them on the wrong hook and the logic either fires once or runs needlessly many times.
+- **"Middleware registered" ≠ "resource already created."** Lazy by default: `ThreadData` only computes paths (no directories), and `Sandbox` doesn't acquire in `before_agent` at all — the resource only shows up on first real use.
+- **Don't assume a given middleware is even in this run.** The chain is assembled conditionally (plan mode / vision / tool_search / subagent / guardrail all change the list). Before chasing odd behavior, confirm whether it's actually in this run's list.
+- **`runtime.state[...] = x` inside a tool doesn't save state.** It's a local edit for this one call, gone the moment the function returns — only returning `{...}` or `Command(update=...)` from a hook gets it merged by the reducer. (Sandbox's first acquire relies on `wrap_tool_call` to commit it for exactly this reason; details above.)
+- **Middleware instances aren't created per run — they're reused across runs, with state held in process memory.** What this property can cause shows up at two scopes: ① **within one process, across runs** — state on the instance isn't auto-cleared, so any middleware that stashes per-run state on itself must clear it in `before_agent` / `after_agent`; skip that cleanup and one run's leftovers bleed into the next (Todo and LoopDetection do exactly this clearing at the open and close). ② **across processes** — that in-memory state isn't shared, so under a multi-worker deployment (the Gateway scaled to multiple processes / replicas), two runs of the same thread landing on different workers make best-effort features (loop detection, circuit breaker, memory debounce) each compute in isolation and lose some effectiveness. This is a known limit of "state in memory"; the saving grace is that the conversation itself (`messages`, `todos`, `sandbox_id`, …) is backed by the checkpointer / store and stays consistent across workers, so it **isn't corrupted**. Removing it entirely takes thread-affinity routing or moving this state to shared storage (e.g. Redis).
 
 ---
 
