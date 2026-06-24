@@ -550,7 +550,7 @@ The point of DeferredToolFilter isn't just "hide the schema" — it's two-layer 
 
 <Philosophy title="Design rationale">
 
-The inbound half isn't reasoning — it's preparing the model call: runtime state in place, model-visible context in place, message protocol in place, and the request's tool schemas and large outputs tidied up too.
+The inbound half is about getting ready before the real model call: runtime state in place, model-visible context in place, message protocol in place, and the request's tool schemas and large outputs tidied up too.
 
 DeerFlow doesn't push this cross-cutting logic into the graph nodes; it puts it in middleware. The upside is that the graph stays a clean "model ↔ tools" main loop, easy to read; the cost is that order becomes an implicit interface — put one middleware on the wrong hook, or in the wrong registration order, and the code still runs while the semantics have already changed.
 

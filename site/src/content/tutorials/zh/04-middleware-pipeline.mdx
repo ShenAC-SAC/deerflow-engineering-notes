@@ -550,7 +550,7 @@ DeferredToolFilter 的关键不只是"藏 schema"，而是两层 enforcement：m
 
 <Philosophy title="工程设计哲学">
 
-向内半程做的事不是推理，而是准备模型调用：运行时状态就位，模型可见上下文就位，历史消息协议就位，request 里的 tool schema 和大输出也被整理好。
+向内的半程是在真实模型调用之前做好准备：运行时状态就位，模型可见上下文就位，历史消息协议就位，request 里的 tool schema 和大输出也被整理好。
 
 DeerFlow 没有把这些横切逻辑塞进 graph node，而是放进 middleware。好处是 graph 仍然保持"model ↔ tools"的主循环，干净且好理解；代价是顺序变成了隐式接口——一个 middleware 放错 hook，或者注册顺序不对，表面上看代码能跑，实际语义已经变了。
 
