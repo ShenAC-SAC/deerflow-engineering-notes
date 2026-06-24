@@ -91,7 +91,7 @@ Two things are worth pinning down before reading on.
 
 <MarginNote>Same code, different run, different chain. Plan mode, the vision model, tool_search, the subagent switch, the guardrail config — each changes which middleware actually get assembled.</MarginNote>
 
-## Registration order ≠ execution order: turning the onion
+## Registration order ≠ execution order
 
 This is the chapter's easiest place to get lost, and the mental model you most need to lock in first. Remember one sentence; the rest follows from it:
 
@@ -100,8 +100,8 @@ This is the chapter's easiest place to get lost, and the mental model you most n
 One middleware can attach to several hooks (`before_model`, `after_model`, `wrap_model_call`, …). They share one registration order, but they are **dispatched in different directions**. Picture the onion and it all falls out:
 
 ```text
-on the way IN,  you cross the outer skin first   → earlier-registered runs first
-on the way OUT, you cross the inner layer first  → later-registered runs first
+a request on the way IN,   crosses the outer skin first   → earlier-registered runs first
+an answer on the way OUT,  crosses the inner layer first  → later-registered runs first
 ```
 
 Across the three hook families, that's one rule seen from three angles:
