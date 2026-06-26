@@ -25,7 +25,7 @@ ThreadMetaStore
 
 This separation is reasonable. These surfaces have different query patterns and different recovery semantics. The main 3.0 opportunity is to make the boundaries first-class and configured through one runtime profile.
 
-Application-table schema bootstrap is no longer an open design debt. `persistence.bootstrap.bootstrap_schema()` handles empty DBs, legacy pre-Alembic DBs, and already-versioned DBs with a hybrid `create_all` + Alembic stamp/upgrade strategy. The observations below therefore focus on runtime configuration and recovery semantics, not on missing schema migration machinery.
+Application-table schema bootstrap is a startup-path responsibility. `persistence.bootstrap.bootstrap_schema()` handles empty DBs, legacy pre-Alembic DBs, and already-versioned DBs with a hybrid `create_all` + Alembic stamp/upgrade strategy. The observations below focus on runtime configuration and recovery semantics rather than schema creation.
 
 ## Design Observation 1: `database` And `checkpointer` Are Not Fully Unified
 

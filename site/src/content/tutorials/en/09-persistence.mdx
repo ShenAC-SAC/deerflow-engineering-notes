@@ -514,11 +514,11 @@ It also protects one practical API boundary. `ViewImageMiddleware` may place bas
 
 Serialization is therefore not only format conversion. It also enforces part of the API boundary.
 
-## Debts Already Paid Down
+## Keep Schema Migration Separate From Runtime Store Consistency
 
-If you only remember an older implementation, it is tempting to list "no formal migration/upgrade path for application tables" as a persistence debt. In the current code, that is no longer accurate: `persistence.bootstrap`, the Alembic baseline, `0002_runs_token_usage`, and the idempotent column helper are all on the startup path.
+In the current code, application-table creation and upgrade already have an explicit path: `persistence.bootstrap`, the Alembic baseline, `0002_runs_token_usage`, and the idempotent column helper are all on the Gateway startup path.
 
-That does not mean persistence has no remaining design issues. Schema bootstrap answers "how are tables created and upgraded?" The split-brain risk below answers "do all runtime stores consume the same persistence config?" These are different problems.
+Schema bootstrap answers "how are tables created and upgraded?" The split-brain risk below answers a different question: do the checkpointer, store, run store, run event store, and thread metadata all consume the same persistence config? Keep those problems separate.
 
 ## Remaining Split-Brain Risk
 

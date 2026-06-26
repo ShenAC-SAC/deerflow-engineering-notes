@@ -45,7 +45,7 @@ versioned DB
   alembic upgrade head
 ```
 
-这意味着 schema bootstrap / migration 已经是启动期责任，不再是单独的 3.0 债务。剩余问题主要在配置统一、恢复语义和多 worker ownership。
+这意味着 schema bootstrap / migration 是当前启动期路径的一部分。后面需要重点关注的是配置统一、恢复语义和多 worker ownership。
 
 运行一次 agent 时，`RunContext` 把这些组件交给 `run_agent()`：
 
@@ -420,7 +420,7 @@ SQLite
   Cross-process is best-effort via SQLite file lock + busy_timeout=30000.
 ```
 
-So "DeerFlow lacks schema migration/bootstrap" should be removed from current 3.0 debt lists. The still-open split-brain issue below is different: Store/checkpointer/application persistence do not all consume one resolved persistence profile.
+Schema migration/bootstrap and runtime store consistency are separate questions. The split-brain issue below is about Store/checkpointer/application persistence not all consuming one resolved persistence profile.
 
 ## Current Split-brain Risk
 
@@ -482,7 +482,7 @@ Run events 很适合前端消息、调试和审计，但不能当作恢复图状
 - `make_store()` 尚未跟 `database` 配置统一，可能导致 checkpointer 持久化而 Store 仍在内存。
 - sync checkpointer/store provider 仍偏 legacy `checkpointer` section，和 Gateway async path 不完全一致。
 - `run_events.backend="db"` 且 `database.backend="memory"` 时会回退到 memory，最好在启动时显式报配置错误或警告。
-- schema bootstrap / Alembic baseline 已经落地，不应再列为当前债务；后续新表/新列需要继续通过 migration 维护。
+- 后续新表/新列需要继续通过 schema bootstrap / Alembic migration 维护。
 - startup orphan recovery 目前只在 sqlite 分支执行，postgres / 多 worker 场景需要更明确的 worker ownership 和 lease 设计。
 - Thread metadata 和 checkpoint 之间存在同步关系，例如 title 从 checkpoint 同步到 `threads_meta.display_name`，同步失败会造成列表页和 state 页短暂不一致。
 - `RunJournal` 通过 callback 捕获事件，部分 flush 是 best-effort；事件流不能被当作强一致执行日志。
