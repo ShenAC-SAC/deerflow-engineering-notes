@@ -1,7 +1,6 @@
 ---
 import type { CollectionEntry } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
-import RiskMeter from '../components/RiskMeter.astro';
 import MentalModel from '../components/MentalModel.astro';
 import SourceRef from '../components/SourceRef.astro';
 import { JOURNEY, type Lang, type Station } from '../data/journey.ts';
@@ -26,9 +25,6 @@ const t = lang === 'zh'
   ? { back: '← 返回主线', refs: '源码锚点', frame: `第 ${num} 站 · 已发布`, mm: '心智模型', next: '下一站', prev: '上一站' }
   : { back: '← the journey', refs: 'source anchors', frame: `stop ${num} · published`, mm: 'Mental model', next: 'next stop', prev: 'prev stop' };
 const homePath = link(lang === 'zh' ? '/zh/' : '/');
-const altitudeLabel = lang === 'zh'
-  ? meta.altitude
-  : ({ '实现': 'implementation', '架构': 'architecture', '哲学': 'philosophy' } as Record<string, string>)[meta.altitude] || meta.altitude;
 ---
 <BaseLayout title={`${meta.title[lang]} · DeerFlow`} lang={lang}>
   <article class="tut wrap">
@@ -39,10 +35,6 @@ const altitudeLabel = lang === 'zh'
       <div class="tut-headmeta">
         <p class="tut-frame eyebrow">{t.frame}</p>
         <h1 class="tut-title">{meta.title[lang]}</h1>
-        <div class="tut-meta">
-          <span class="tut-alt">{altitudeLabel}</span>
-          <RiskMeter value={meta.risk} lang={lang} />
-        </div>
       </div>
     </header>
 
@@ -69,7 +61,7 @@ const altitudeLabel = lang === 'zh'
 </BaseLayout>
 
 <style>
-  .tut { padding-top: 40px; padding-bottom: 24px; }
+  .tut { max-width: 880px; padding-top: 40px; padding-bottom: 24px; }
   .tut-back {
     font-family: var(--mono); font-size: .8rem; letter-spacing: .04em; color: var(--ink-faint);
   }
@@ -84,11 +76,6 @@ const altitudeLabel = lang === 'zh'
   .tut-frame { color: var(--ink-faint); margin: 0 0 6px; }
   .tut-title {
     margin: 0; font-size: 2.4rem; line-height: 1.1; letter-spacing: -.018em;
-  }
-  .tut-meta { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
-  .tut-alt {
-    font-family: var(--mono); font-size: .66rem; letter-spacing: .14em; text-transform: uppercase;
-    color: var(--blue); border: 1px solid rgba(44,90,134,.3); padding: 2px 9px; border-radius: 20px;
   }
 
   .tut-refs {

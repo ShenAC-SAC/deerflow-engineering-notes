@@ -2,8 +2,8 @@
 lang: en
 slug: 04-middleware-pipeline
 station: 4
-title: "Middleware pipeline (I): how a request crosses the onion"
-sha: d2cc991d
+title: "Middleware pipeline (I): preparing runtime before model calls"
+sha: 7e7f0410
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
   - backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py
@@ -28,9 +28,9 @@ import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 import Design30 from '../../../components/Design30.astro';
 
-The first time you open `build_middlewares()`, it looks unremarkable — just a series of objects appended one after another to a list. But the *arrangement* of that list decides the runtime behavior of the entire run that follows. The user's prompt doesn't go straight to the model; it travels through layer after layer of middleware first. They prepare the thread's file paths, handle uploaded attachments, set up the sandbox's lifecycle, inject the date and memory, and patch the message protocol the provider expects — so that by the time the model is actually called, the request has already been shaped into what DeerFlow wants it to see.
+The first time you open `build_middlewares()`, it looks unremarkable — just a series of objects appended one after another to a list. But the *arrangement* of that list decides the runtime behavior of the entire run that follows. The user's prompt passes through a set of middleware before the model call. They prepare the thread's file paths, handle uploaded attachments, set up the sandbox's lifecycle, inject the date and memory, and patch the message protocol the provider expects. By the time the model call starts, the request has already been shaped into what DeerFlow wants it to see.
 
-The last stop looked at how tools get collected and exposed. This one goes deeper: **how a single run crosses the middleware onion and finally reaches the model call.** The other half — how `after_model`, `wrap_tool_call`, and `after_agent` take the result back out in reverse order — is the next stop.
+The last stop looked at how tools get collected and exposed. This stop follows the run lifecycle: **which middleware runs before the model call, and which state and protocol boundaries are established there.** The other half — how `after_model`, `wrap_tool_call`, and `after_agent` process the result in reverse order — is the next stop.
 
 <FlowDiagram
   caption="The inbound half: a run enters and crosses before_agent, before_model, and wrap_model_call before reaching the model call."
@@ -44,9 +44,9 @@ The last stop looked at how tools get collected and exposed. This one goes deepe
 
 ## One list, built in two passes
 
-The assembly entry point is <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="d2cc991d" symbol="build_middlewares" />. Logically it works in two passes: first take a runtime base shared by the lead and its subagents, then stack the lead-agent-only middleware on top.
+The assembly entry point is <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" symbol="build_middlewares" />. Logically it works in two passes: first take a runtime base shared by the lead and its subagents, then stack the lead-agent-only middleware on top.
 
-The shared base comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="d2cc991d" symbol="build_lead_runtime_middlewares" />:
+The shared base comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="7e7f0410" symbol="build_lead_runtime_middlewares" />:
 
 ```text
 shared base (reused by lead and subagent)
@@ -84,31 +84,31 @@ The `?`-marked entries in both tables mean a layer **isn't guaranteed to appear 
 
 Two things are worth pinning down before reading on.
 
-**First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't decorative — it documents real data dependencies the type system can't express: `ThreadData` computes the workspace / uploads / outputs paths first, and both `Uploads` (which scans the uploads path for files) and `Sandbox` (whose mounts use those paths) need them, so both must come after `ThreadData`; and `Clarification` has to intercept `ask_clarification` and turn it into a run-level pause before the tool actually runs, so it sits at the innermost edge of the tool boundary and is always registered last. Changing the order changes behavior, and no compile-time check will warn you that you got it wrong.
+**First, order itself is a runtime contract.** The comment block above `build_middlewares()` isn't decorative — it documents data dependencies the type system can't express: `ThreadData` computes the workspace / uploads / outputs paths first, and both `Uploads` (which scans the uploads path for files) and `Sandbox` (whose mounts use those paths) need them, so both must come after `ThreadData`; and `Clarification` has to intercept `ask_clarification` and turn it into a run-level pause before the tool runs, so it sits at the innermost edge of the tool boundary and is always registered last. Changing the order changes behavior, and no compile-time check will warn you that you got it wrong.
 
 **Second, registration order is not each hook's execution order.** One middleware can attach to several hooks, and different hooks dispatch in different directions — some forward, some reverse. This is the foundation for everything that follows; the next section explains it in detail.
 
-<MarginNote>Same code, different run, different chain. Plan mode, the vision model, tool_search, the subagent switch, the guardrail config — each changes which middleware actually get assembled.</MarginNote>
+<MarginNote>Same code, different run, different chain. Plan mode, the vision model, tool_search, the subagent switch, and the guardrail config each change which middleware are assembled.</MarginNote>
 
 ## How registration order and execution order relate
 
 This is the chapter's easiest place to get lost. Remember one sentence first:
 
-> **A middleware registered earlier is an outer layer of the onion.**
+> **A middleware registered earlier sits farther outside in the call chain.**
 
-One middleware can attach to several hooks (`before_model`, `after_model`, `wrap_model_call`, …). They share one registration order, but they are **dispatched in different directions**. The onion model makes it clearer:
+One middleware can attach to several hooks (`before_model`, `after_model`, `wrap_model_call`, …). They share one registration order, but they are **dispatched in different directions**. The call-chain nesting is the important part:
 
 ```text
-a request on the way IN,   crosses the outer skin first   → earlier-registered runs first
-an answer on the way OUT,  crosses the inner layer first  → later-registered runs first
+before the model call      → earlier-registered runs first
+after the model returns    → later-registered runs first
 ```
 
 Across the three hook families, that's one rule seen from three angles:
 
 ```text
-before_* (runs only on the way in)    forward:  earlier-registered first
-after_*  (runs only on the way out)   reverse:  later-registered first
-wrap_*   (handles both in and out)    the onion itself: earlier wraps later
+before_* (before call)       forward:  earlier-registered first
+after_*  (after return)      reverse:  later-registered first
+wrap_*   (around the call)   earlier registered wraps later
 ```
 
 A minimal example. Registration order `A` (above), `B` (below), both attached to `before_model` and `after_model`:
@@ -125,7 +125,7 @@ A and B's order is **completely reversed**: A first on the way in, B first on th
 ```text
 in  →  A takes the request, tweaks it, calls handler
          └─ B takes the request, tweaks it, calls handler
-               └─ the real model call returns a response
+              └─ the model call returns a response
          ┌─ B handles the response first
 out ←  A handles the response last
 ```
@@ -134,11 +134,11 @@ A is the skin: **first** to touch the request, **last** to touch the answer; B i
 
 The next stop's `SafetyFinishReasonMiddleware` is deliberately registered **late** (inner); its comment spells out why: so that in `after_model`'s reverse dispatch it runs **first**, clearing the provider's untrustworthy safety-terminated `tool_calls` ahead of loop detection and subagent accounting. Registered inner → runs first on the way out.
 
-So this chapter **doesn't read the list top to bottom**; it walks the run's lifecycle: the request goes inward layer by layer (`before_agent` → `before_model` → `wrap_model_call`) to the model, then the answer comes back out layer by layer. That way the order you read is the order things actually happen at runtime.
+So this chapter follows the run lifecycle: the request goes through `before_agent` → `before_model` → `wrap_model_call` before reaching the model call. The processing after the model returns is the next stop. That way the order you read matches runtime execution order.
 
 ## Where does a middleware's output go?
 
-Beyond order, reading middleware means watching a second axis: **where each middleware's output actually goes.** You'll keep running into two phrasings later — "written back to graph state" and "only changes this request, not state" — so let's pin the line between them now, once.
+Beyond order, reading middleware means watching a second axis: **where each middleware's output lands.** You'll keep running into two phrasings later — "written back to graph state" and "request-local only" — so let's pin the line between them now, once.
 
 Graph state (`ThreadState`) is a blackboard that is **checkpointed and persisted, survives across turns, and is shared by every middleware and tool.** Whether something belongs there comes down to three questions:
 
@@ -156,7 +156,7 @@ kept in the middleware instance     →  process-level runtime control (loop cou
 sent outside                        →  a side effect (memory queue, audit logs, SSE events)
 ```
 
-One key intuition: **what belongs in state is decided by "is it still needed after a pause, or does someone else have to see it" — not by "is it important."** A fleeting loop warning matters, but it must never be checkpointed and restored on resume. Carry that ruler down the page and you can judge, for each middleware, whether it writes state or not.
+Use this rule: **state is for values that must survive a pause, resume in another process, or be seen by another middleware or tool.** A fleeting loop warning matters, but it must never be checkpointed and restored on resume. Carry that ruler down the page and you can judge, for each middleware, whether it writes state or keeps the value request-local.
 
 ## The three hooks this part covers
 
@@ -193,7 +193,7 @@ Todo(before_agent cleanup, plan mode only)
 LoopDetection(before_agent reset, if enabled)
 ```
 
-**ThreadData** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py" sha="d2cc991d" symbol="ThreadDataMiddleware" />. From `thread_id` and an optional `user_id` it computes:
+**ThreadData** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py" sha="7e7f0410" symbol="ThreadDataMiddleware" />. From `thread_id` and an optional `user_id` it computes:
 
 ```text
 workspace_path
@@ -205,14 +205,14 @@ With the default `lazy_init=True`, it mostly **computes and writes the paths** �
 
 It also stamps `run_id` and a timestamp onto the latest user message, so the frontend or runtime can identify this turn's input. That move quietly reveals an easily-missed fact: middleware can rewrite message objects right at the run's opening — it doesn't have to wait until just before the model call.
 
-**Uploads** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/uploads_middleware.py" sha="d2cc991d" symbol="UploadsMiddleware" />. It is *not* responsible for "uploading files" — the frontend or gateway has already placed them in the thread's uploads directory. Its job is to scan the new files attached to the current message, plus the existing history files in that directory, build a `<uploaded_files>` context block, and prepend it before the latest `HumanMessage`.
+**Uploads** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/uploads_middleware.py" sha="7e7f0410" symbol="UploadsMiddleware" />. It is *not* responsible for "uploading files" — the frontend or gateway has already placed them in the thread's uploads directory. Its job is to scan the new files attached to the current message, plus the existing history files in that directory, build a `<uploaded_files>` context block, and prepend it before the latest `HumanMessage`.
 
 This step is assembled only for the lead agent. Subagents don't install `UploadsMiddleware`, because a subagent inherits an execution context and doesn't need to re-process the user's upload entry point.
 
 There's also a design pattern buried here that many later middleware reuse:
 
 ```text
-the real file:
+file on disk:
   stays in the thread uploads directory
 
 what the model sees:
@@ -224,13 +224,13 @@ what the frontend needs:
 
 So Uploads doesn't put entire file contents into the prompt — it tells the model "which files exist, where they are, what type, roughly what's in them." If the model truly needs the full content, it reads it later through a file tool.
 
-**Sandbox** comes from <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="d2cc991d" symbol="SandboxMiddleware" />. It defaults to `lazy_init=True`. So `before_agent` usually does *not* acquire a sandbox on the spot; the real acquire happens on the first sandbox-tool call.
+**Sandbox** comes from <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="7e7f0410" symbol="SandboxMiddleware" />. It defaults to `lazy_init=True`. So `before_agent` usually does *not* acquire a sandbox on the spot; acquire happens on the first sandbox-tool call.
 
 This layer's job is to establish the sandbox's lifecycle and state contract.
 
 ```text
 state["sandbox"] holds the sandbox_id
-the sandbox provider manages the real sandbox instance
+the sandbox provider manages the sandbox instance
 after_agent handles release
 wrap_tool_call persists a sandbox_id created during tool execution back into graph state
 ```
@@ -249,16 +249,16 @@ sandbox_id:
   the resource identity written into graph state
 
 Sandbox instance:
-  the real execution object the provider holds
+  the execution object the provider holds
 ```
 
-Inside a tool, `runtime.state["sandbox"]` only gives you something like `{"sandbox_id": "..."}`; the thing that actually runs commands and reads/writes files is the sandbox instance the provider looks up from that id.
+Inside a tool, `runtime.state["sandbox"]` only gives you something like `{"sandbox_id": "..."}`; commands and file operations go through the sandbox instance that the provider looks up from that id.
 
-**DynamicContext** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="d2cc991d" />. It injects the date and memory as a hidden `HumanMessage` rather than editing the system prompt.
+**DynamicContext** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="7e7f0410" />. It injects the date and memory as a hidden `HumanMessage` rather than editing the system prompt.
 
-The reason for not changing the system prompt: the prefix cache. Model providers cache the computed result of a stable prompt prefix and reuse it next time the same prefix shows up — saving both time and money; but change a single character of that prefix and the cache is void, recomputed from scratch. Dynamic content like the date and memory, which can change every turn, would keep busting that cache if it lived in the system prompt — so it has to ride the message stream (go into the message list) and leave the system prompt unchanged.
+The reason for keeping the system prompt stable is the prefix cache. Model providers cache the computed result of a stable prompt prefix and reuse it next time the same prefix shows up, saving both time and money. Changing one character of that prefix invalidates the cache and forces recomputation. Dynamic content like the date and memory can change every turn, so it rides the message stream and leaves the system prompt unchanged.
 
-So how do you slip a reminder **ahead of** the user's question without dirtying the original text? DynamicContext uses an **ID-swap**. One premise first: LangGraph's message reducer has a rule — a new message whose id matches an existing one **replaces it in place**; a different id **appends**. DynamicContext leans on that, giving the reminder the original user message's id and re-homing the real user text to a derived id `{original-id}__user`:
+So how do you put a reminder **ahead of** the user's question without changing the original text? DynamicContext uses an **ID-swap**. One premise first: LangGraph's message reducer has a rule — a new message whose id matches an existing one **replaces it in place**; a different id **appends**. DynamicContext leans on that, giving the reminder the original user message's id and moving the original user text to a derived id `{original-id}__user`:
 
 ```text
 before:
@@ -277,13 +277,13 @@ The injection strategy isn't "drop one in every turn":
 
 ```text
 first turn:
-  inject date + memory before the first real user message
+  inject date + memory before the first user-authored message
 
 same day:
   inject nothing
 
 date changed:
-  add a date-only reminder before the latest real user message
+  add a date-only reminder before the latest user-authored message
 ```
 
 There are two semantic layers to keep apart here:
@@ -291,14 +291,14 @@ There are two semantic layers to keep apart here:
 ```text
 content envelope:
   <system-reminder>...</system-reminder>
-  for the model to read — helps it see this isn't the user's ordinary text
+  for the model to read — marks this as runtime context rather than the user's ordinary text
 
 additional_kwargs:
   markers like hide_from_ui / dynamic_context_reminder
   for the frontend and middleware to read — used to hide, identify, dedupe
 ```
 
-So "model-visible" and "frontend-visible" are not the same thing. The model can see DynamicContext's reminder, but metadata tells the frontend not to render it as a user message.
+Separate model visibility from frontend visibility. The model can see DynamicContext's reminder; metadata tells the frontend not to render it as a user message.
 
 <Design30>
 Date and memory are not the same reliability class. The date is a cheap local fact; memory may involve storage, tokenization, and cold-start I/O. Today they share one timeout boundary; 3.0 could split them, so a memory timeout doesn't take date injection down with it.
@@ -325,7 +325,7 @@ Todo(before_model reminder, plan mode only)
 ViewImage
 ```
 
-**Summarization** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="d2cc991d" />. When history grows too long, it doesn't simply truncate — it replaces the messages wholesale:
+**Summarization** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="7e7f0410" />. When history grows too long, it doesn't simply truncate — it replaces the messages wholesale:
 
 ```python
 {
@@ -339,7 +339,7 @@ ViewImage
 
 `RemoveMessage(REMOVE_ALL_MESSAGES)` "drops every existing message," followed by the freshly generated summary and the preserved original messages — so this is a **wholesale replacement**, not an append at the end.
 
-The summary itself is a `HumanMessage(name="summary")`. The `HumanMessage` role lets the model read it as background; `name="summary"` tells the runtime and middleware it isn't real user input — so later middleware won't treat the summary as a user prompt and parse slash commands or inject context against it.
+The summary itself is a `HumanMessage(name="summary")`. The `HumanMessage` role lets the model read it as background; `name="summary"` tells the runtime and middleware this is runtime-created context, so later middleware will not treat the summary as a user prompt and parse slash commands or inject context against it.
 
 On top of that, DeerFlow adds a structure-aware retention policy: if the to-summarize region holds a recent tool result that read `/mnt/skills`, the related AIMessage/ToolMessage bundle gets rescued from the to-summarize region back into the preserved region. The reason is that skill content is usually exact executable instruction, and flattening it into prose loses paths, constraints, and formatting.
 
@@ -356,7 +356,7 @@ preserve_recent_skill_tokens_per_skill:
   per-skill token cap
 ```
 
-This keeps summarization from being defeated by rescuing "all the old skill content at once." The design judgment behind it: it doesn't actually understand the content — it bets that "a skill file read in recently is probably still the instruction to follow right now," so it keeps verbatim only the most recent `/mnt/skills` reads in the to-summarize region that fit the budget, and summarizes the rest as usual.
+This keeps summarization from being defeated by rescuing "all the old skill content at once." The design judgment is simple: a recently read skill file is likely still the instruction to follow right now. So it keeps verbatim only the most recent `/mnt/skills` reads in the to-summarize region that fit the budget, and summarizes the rest as usual.
 
 <Design30>
 Summarization is not "generic compression" — it's "selective loss." Ordinary chat can be summarized; still-active instructions, schemas, tool results, and constraints are closer to executable context. 3.0 could first extract typed context items, then decide per item whether to keep raw, summarize, externalize, or move to long-term memory by retention value.
@@ -376,7 +376,7 @@ Todo before_model:
   fills task context that's still alive in graph state but lost from the message window
 ```
 
-**ViewImage** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/view_image_middleware.py" sha="d2cc991d" />, and is assembled only when the model supports vision. It turns images the model has already read through the `view_image` tool into a provider-compatible multimodal message, so the next model call can actually "see" the image content rather than just a "tool succeeded" line.
+**ViewImage** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/view_image_middleware.py" sha="7e7f0410" />, and is assembled only when the model supports vision. It turns images the model has already read through the `view_image` tool into a provider-compatible multimodal message, so the next model call receives the image content instead of only a "tool succeeded" line.
 
 Keep this separate from the tool itself:
 
@@ -398,7 +398,7 @@ ViewImage exposes a general problem: don't equate "the last HumanMessage" with "
 
 ## wrap_model_call: wrapping the model call
 
-`wrap_model_call` is the innermost layer, closest to the model provider. It receives a `handler`, and `handler(request)` means "keep going inward and eventually call the real model." You can change the request before calling `handler`; you can process the response after `handler` returns; and if `handler` raises, you enter the exception path.
+`wrap_model_call` is the innermost layer, closest to the model provider. It receives a `handler`, and `handler(request)` means "continue the call chain and eventually call the model." You can change the request before calling `handler`; you can process the response after `handler` returns; and if `handler` raises, you enter the exception path.
 
 The middleware involved at this layer:
 
@@ -436,12 +436,12 @@ tail:
   helps the model see the ending status, errors, summary line
 
 path:
-  if the full content is really needed, read it with read_file
+  if the full content is needed, read it with read_file
 ```
 
 So it protects the model's context budget, not the model's understanding of the file.
 
-**DanglingToolCall** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="d2cc991d" />, and repairs the provider's tool-call protocol. It guards against a history like:
+**DanglingToolCall** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="7e7f0410" />, and repairs the provider's tool-call protocol. It guards against a history like:
 
 ```text
 AIMessage(tool_calls=[call_1])
@@ -467,7 +467,7 @@ The first step groups existing ToolMessages by their own `tool_call_id`:
 tool_messages_by_id[msg.tool_call_id].append(msg)
 ```
 
-The second step, on reaching an AIMessage, looks up that index in the order of its `tool_calls`. A real ToolMessage found gets moved right after the AIMessage; nothing found means a synthetic `ToolMessage(status="error")` is appended. So the final order isn't guaranteed by the physical position of ToolMessages in the original history — it's rebuilt from the protocol relationship `AIMessage.tool_calls[].id == ToolMessage.tool_call_id`.
+The second step, on reaching an AIMessage, looks up that index in the order of its `tool_calls`. A ToolMessage found gets moved right after the AIMessage; nothing found means a synthetic `ToolMessage(status="error")` is appended. The final order is rebuilt from the protocol relationship `AIMessage.tool_calls[].id == ToolMessage.tool_call_id`, not from the physical position of ToolMessages in the original history.
 
 One more detail worth noticing: when `_message_tool_calls()` collects tool-call ids, it checks three sources at once — `msg.tool_calls`, `msg.additional_kwargs["tool_calls"]`, and `msg.invalid_tool_calls`. Different providers' adapters may stash tool-call info in different fields, and some even mark a parse-failed call as `invalid_tool_calls`. DanglingToolCall's principle is to over-repair rather than under-repair: as long as some AIMessage claims it emitted a tool call — whichever field it lives in — there must be a matching ToolMessage after it.
 
@@ -479,7 +479,7 @@ request.override(messages=patched)
 
 That's exactly why it chooses `wrap_model_call` over `before_model`: the ToolMessage has to be inserted right after the corresponding AIMessage, not simply appended to the end.
 
-**LLMErrorHandling** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py" sha="d2cc991d" />. It guards the model-provider boundary: timeouts, connection failures, 5xx, 429, quota/auth — all classified and handled here. Retriable transient/busy errors back off and retry; non-retriable or retry-exhausted ones return a fallback `AIMessage`.
+**LLMErrorHandling** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py" sha="7e7f0410" />. It guards the model-provider boundary: timeouts, connection failures, 5xx, 429, quota/auth — all classified and handled here. Retriable transient/busy errors back off and retry; non-retriable or retry-exhausted ones return a fallback `AIMessage`.
 
 It handles exceptions raised by `handler(request)` — the "didn't get a normal AIMessage" case. It does *not* handle the case where the provider returned normally but the content is untrustworthy. That boundary matters: the next stop's `SafetyFinishReasonMiddleware` is what handles "the provider returned an AIMessage normally, but finish_reason says it was safety-terminated, so its tool_calls can't be trusted."
 
@@ -495,7 +495,7 @@ Note that `closed` here is the healthy state, not "requests closed off" — that
 
 **LoopDetection** is one middleware holding two brakes: the **hard** one — when repetition hits the limit it rewrites the AIMessage the model just produced, clears `tool_calls`, and forces a stop — lives in `after_model` and is left for the next stop; here in `wrap_model_call` it only handles the **soft** one. The soft brake works like this: the previous `after_model` spotted the start of a loop but it hadn't reached the hard stop line, so it queued a reminder; once this turn's tool results are all back, that reminder is appended as a fresh `HumanMessage` at the end of the model request. It isn't injected straight from `after_model` because that would wedge it between an `AIMessage(tool_calls)` and its paired `ToolMessage`, breaking the pairing protocol — so the warning has to wait until the tool results are back.
 
-**SkillActivation** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="d2cc991d" />. When the user starts with `/skill-name`, it reads the full `SKILL.md` and injects a hidden `HumanMessage` into this call's request. Note it **doesn't write back to graph state**; it only changes the request sent this one time — that is, it's a **turn-local (scoped to just this turn) request overlay (it covers only this request and is gone next turn)**. This way a skill enters the context only when explicitly activated, instead of polluting the context every turn.
+**SkillActivation** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="7e7f0410" />. When the user starts with `/skill-name`, it reads the full `SKILL.md` and injects a hidden `HumanMessage` into this call's request. Note it **doesn't write back to graph state**; it only changes the request sent this one time — that is, it's a **turn-local (scoped to just this turn) request overlay (it covers only this request and is gone next turn)**. This way a skill enters the context only when explicitly activated, instead of polluting the context every turn.
 
 The difference from DynamicContext:
 
@@ -528,7 +528,7 @@ If the skill doesn't exist, is disabled, or the current agent isn't allowed to u
 
 **Todo** in `wrap_model_call` consumes the completion reminders queued during the `after_model` phase. If the model tries to wrap up while todos are incomplete, Todo's `after_model` jumps back to the model first; the next `wrap_model_call` then injects the hidden reminder into that turn's request.
 
-**DeferredToolFilter** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="d2cc991d" />. Two words first: a **deferred tool** is one not exposed to the model up front — typically the large pool of MCP tools, which would blow up the context and muddle the model's tool choice if all dumped in; to use one, the model must first call `tool_search` to **promote** the few it needs. This middleware's job is to make sure an un-promoted tool is **neither visible nor runnable**. Its enforcement is two-layered, and you need both:
+**DeferredToolFilter** comes from <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="7e7f0410" />. Two words first: a **deferred tool** is one not exposed to the model up front — typically the large pool of MCP tools, which would blow up the context and muddle the model's tool choice if all dumped in; to use one, the model must first call `tool_search` to **promote** the few it needs. This middleware's job is to make sure an un-promoted tool is **neither visible nor runnable**. Its enforcement is two-layered, and you need both:
 
 ```text
 wrap_model_call (model side):
@@ -544,12 +544,12 @@ wrap_tool_call (tool side):
 Filtering on the model side alone isn't enough — the model can still guess an unpromoted tool's name from history, a prompt hint, or provider quirks. It's only enforcement when both layers hold.
 
 <Design30>
-The point of DeferredToolFilter isn't just "hide the schema" — it's two-layer enforcement: the model side controls visible schemas, the tool side controls what can actually execute. The first alone isn't enough — the model can still call an unpromoted tool from history or guessing. 3.0 could abstract this into a first-class `ToolVisibilityPolicy` that declares visible, executable, and blocked tools at once.
+DeferredToolFilter has two enforcement layers: the model side controls visible schemas, the tool side controls what can execute. The first alone isn't enough — the model can still call an unpromoted tool from history or guessing. 3.0 could abstract this into a first-class `ToolVisibilityPolicy` that declares visible, executable, and blocked tools at once.
 </Design30>
 
 <Philosophy title="Design rationale">
 
-The inbound half is about getting ready before the real model call: runtime state in place, model-visible context in place, message protocol in place, and the request's tool schemas and large outputs tidied up too.
+The inbound half is about getting ready before the model call: runtime state in place, model-visible context in place, message protocol in place, and the request's tool schemas and large outputs tidied up too.
 
 DeerFlow doesn't push this cross-cutting logic into the graph nodes; it puts it in middleware. The upside is that the graph stays a clean "model ↔ tools" main loop, easy to read; the cost is that order becomes an implicit interface — put one middleware on the wrong hook, or in the wrong registration order, and the code still runs while the semantics have already changed.
 
@@ -575,8 +575,8 @@ DeerFlow doesn't push this cross-cutting logic into the graph nodes; it puts it 
 ## Easy-to-misread points
 
 - **`before_agent` doesn't run every turn — it runs once for the whole run.** Things that must happen every turn (summaries, todo reminders, image injection) belong on `before_model`; put them on the wrong hook and the logic either fires once or runs needlessly many times.
-- **"Middleware registered" ≠ "resource already created."** Lazy by default: `ThreadData` only computes paths (no directories), and `Sandbox` doesn't acquire in `before_agent` at all — the resource only shows up on first real use.
-- **Don't assume a given middleware is even in this run.** The chain is assembled conditionally (plan mode / vision / tool_search / subagent / guardrail all change the list). Before chasing odd behavior, confirm whether it's actually in this run's list.
+- **"Middleware registered" ≠ "resource already created."** Lazy by default: `ThreadData` only computes paths (no directories), and `Sandbox` doesn't acquire in `before_agent` at all — the resource only appears on first use.
+- **Don't assume a given middleware is even in this run.** The chain is assembled conditionally (plan mode / vision / tool_search / subagent / guardrail all change the list). Before chasing odd behavior, confirm whether it is in this run's list.
 - **`runtime.state[...] = x` inside a tool doesn't save state.** It's a local edit for this one call, gone the moment the function returns — only returning `{...}` or `Command(update=...)` from a hook gets it merged by the reducer. (Sandbox's first acquire relies on `wrap_tool_call` to commit it for exactly this reason; details above.)
 - **Middleware instances aren't created per run — they're reused across runs, with state held in process memory.** What this property can cause shows up at two scopes: ① **within one process, across runs** — state on the instance isn't auto-cleared, so any middleware that stashes per-run state on itself must clear it in `before_agent` / `after_agent`; skip that cleanup and one run's leftovers bleed into the next (Todo and LoopDetection do exactly this clearing at the open and close). ② **across processes** — that in-memory state isn't shared, so under a multi-worker deployment (the Gateway scaled to multiple processes / replicas), two runs of the same thread landing on different workers make best-effort features (loop detection, circuit breaker, memory debounce) each compute in isolation and lose some effectiveness. This is a known limit of "state in memory"; the saving grace is that the conversation itself (`messages`, `todos`, `sandbox_id`, …) is backed by the checkpointer / store and stays consistent across workers, so it **isn't corrupted**. Removing it entirely takes thread-affinity routing or moving this state to shared storage (e.g. Redis).
 

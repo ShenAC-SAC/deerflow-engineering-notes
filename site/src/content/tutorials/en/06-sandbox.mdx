@@ -1,0 +1,325 @@
+---
+lang: en
+slug: 06-sandbox
+station: 6
+title: "Sandbox system: where tools run, and who decides"
+sha: 7e7f0410
+sourceRefs:
+  - backend/packages/harness/deerflow/sandbox/tools.py
+  - backend/packages/harness/deerflow/sandbox/middleware.py
+  - backend/packages/harness/deerflow/sandbox/sandbox.py
+  - backend/packages/harness/deerflow/sandbox/sandbox_provider.py
+  - backend/packages/harness/deerflow/sandbox/local/local_sandbox.py
+  - backend/packages/harness/deerflow/sandbox/local/local_sandbox_provider.py
+  - backend/packages/harness/deerflow/community/aio_sandbox/aio_sandbox.py
+  - backend/packages/harness/deerflow/community/aio_sandbox/aio_sandbox_provider.py
+  - backend/packages/harness/deerflow/agents/thread_state.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+The same `bash("rm -rf build/")` call means very different things under different sandbox providers. In local mode it runs through the shell on the Gateway host. In AIO mode it is sent to a shell/file API inside a container or Pod. The command text is the same; the execution boundary is not.
+
+The tools in `sandbox/tools.py` look like simple file and shell operations: `bash`, `ls`, `read_file`, `write_file`, `str_replace`. The architectural question is where each external operation lands, and which boundary contains its side effects.
+
+> The sandbox is the tool execution environment and capability boundary: it decides what external resources an agent may touch, and where commands execute.
+
+<FlowDiagram
+  caption="Tool execution: ToolNode calls the tool function, while ensure_sandbox_initialized and the provider bind that call to an execution environment."
+  chart={`flowchart TD
+  TC["model emits tool call"] --> TN["ToolNode calls tool function and injects runtime"]
+  TN --> ESI["ensure_sandbox_initialized(runtime)"]
+  ESI --> SID["read runtime.state['sandbox'].sandbox_id"]
+  SID --> PROV["provider.get(sandbox_id)"]
+  PROV --> SBX["Sandbox instance: local / container / Pod"]
+  SBX --> EXEC["execute_command / read_file / write_file / list_dir"]`}
+/>
+
+## State Stores Identity
+
+The first boundary to keep clear is the boundary between graph state and live resources. The graph state stores only a `sandbox_id`; it does not store the object that can execute commands.
+
+```text
+runtime.state["sandbox"] = {"sandbox_id": "local:thread-123"}
+```
+
+That value is part of `ThreadState` (see <SourceRef file="backend/packages/harness/deerflow/agents/thread_state.py" sha="7e7f0410" symbol="ThreadState" />). It records which sandbox this thread is bound to. Its reducer is DeerFlow's own `merge_sandbox`, and the field type is factored into `SandboxStateField`. The behavior is explicit: idempotent writes of the same `sandbox_id` are accepted, conflicting sandbox ids are rejected. The actual `Sandbox` instance lives behind the sandbox provider.
+
+This split is necessary because graph state can be checkpointed and restored in another process. A container connection, an httpx client, or a process handle is a live in-process resource; it cannot be safely serialized into a checkpoint. The stable thing that can be persisted is an id. After restart, or when a request lands on another worker, the provider uses that id to find or rebuild the execution resource.
+
+```text
+sandbox_id        resource identity stored in graph state
+Sandbox instance  live execution object held by the provider
+```
+
+<MarginNote>The principle is simple: identity can be persisted; connections cannot. `sandbox_id` is recoverable state. `Sandbox` is a live resource.</MarginNote>
+
+One subtlety matters here. Writing `runtime.state["sandbox"] = ...` inside a tool does not by itself persist the update into LangGraph state. That mutation is local to the current tool invocation. To make the new sandbox id visible to later nodes and checkpoints, DeerFlow returns a `Command(update={"sandbox": ...})`. `SandboxMiddleware.wrap_tool_call` exists partly to attach that update when lazy initialization happens inside a tool call.
+
+## Two Interfaces
+
+The sandbox layer has two separate interfaces.
+
+`Sandbox` (see <SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox.py" sha="7e7f0410" symbol="Sandbox" />) describes what can be done inside an environment:
+
+```text
+execute_command(command)
+read_file(path)
+write_file(path, content)
+list_dir(path)
+glob / grep
+```
+
+`SandboxProvider` (see <SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox_provider.py" sha="7e7f0410" symbol="SandboxProvider" />) describes how an environment is acquired, reused, and released:
+
+```text
+acquire(thread_id)  find or create a sandbox for this thread
+get(sandbox_id)     return the live Sandbox instance
+release(sandbox_id) release the current run's hold on it
+shutdown()          clean up on process shutdown
+```
+
+Do not confuse sandbox provider with model provider. A model provider serves model calls. A sandbox provider serves tool execution environments.
+
+## Thread Identity
+
+Here `thread_id` is not an OS thread and not a Python thread. It is the application-level identity for a DeerFlow conversation or task.
+
+```text
+OS process       one Python service process with its own memory
+Python thread    an execution unit inside a process
+DeerFlow thread  a conversation/task identity, carried as thread_id
+```
+
+Sandbox tools look for the id in two places:
+
+```python
+thread_id = runtime.context.get("thread_id")
+if thread_id is None:
+    thread_id = runtime.config.get("configurable", {}).get("thread_id")
+```
+
+Gateway workers pass it through runtime context; embedded clients pass it through `configurable`. The provider uses it as the stable key for "the same conversation should reuse the same sandbox". Process memory may be gone after restart, but the upstream caller can still pass the same `thread_id`.
+
+## Local Is Not Strong Isolation
+
+`LocalSandboxProvider` (see <SourceRef file="backend/packages/harness/deerflow/sandbox/local/local_sandbox_provider.py" sha="7e7f0410" symbol="LocalSandboxProvider" />) is easy to misread. It is not a strong isolation sandbox. It is an adapter over the host filesystem and host shell.
+
+```text
+LocalSandboxProvider.acquire(thread_id)
+  build path mappings for this thread
+  return LocalSandbox("local:{thread_id}", path_mappings=...)
+
+LocalSandbox.execute_command(command)
+  resolve virtual paths to host paths
+  subprocess.run([shell, "-c", command])
+  mask host paths back to virtual paths in output
+```
+
+The key line is in `LocalSandbox.execute_command()` (see <SourceRef file="backend/packages/harness/deerflow/sandbox/local/local_sandbox.py" sha="7e7f0410" symbol="LocalSandbox.execute_command" />): local bash ultimately runs through `subprocess.run([shell, "-c", command])`. It runs on the Gateway host, not inside a container.
+
+File tools can validate paths and keep operations under allowed roots. Bash is broader: pipes, redirection, environment variables, system commands, and side effects cannot be fully contained by string validation. That is why local bash needs a separate host-bash gate.
+
+## Host Bash Gating
+
+`is_host_bash_allowed()` checks whether the current provider is local and whether `sandbox.allow_host_bash` is explicitly enabled.
+
+```text
+local provider + allow_host_bash=False   reject bash
+local provider + allow_host_bash=True    allow host bash
+non-local provider                       bash runs inside the sandbox/container
+```
+
+The gate protects the host shell:
+
+```text
+local bash is not container bash
+local bash is the shell on the Gateway host
+```
+
+Path validation, virtual path replacement, and output masking reduce accidents, but they are not a strong isolation boundary. DeerFlow therefore defaults to denying host bash instead of assuming command-string validation can make it safe.
+
+The validation ignores obvious non-path text fragments such as REST templates (`/devices/{id}`) and non-ASCII string literals. That improves usability, but it does not change the security boundary: local bash is still host bash.
+
+<Design30>
+Host bash authorization is a runtime safety decision, not a model clarification problem. The current switch is static: `allow_host_bash` is either off or on. A stronger 3.0 shape would be a runtime approval policy such as `sandbox.host_bash_policy: deny | ask | allow`. The `ask` branch should pause execution, show the command and its risk, wait for user approval, and record an audit event. It should not reuse `ask_clarification`, because clarification belongs to the model interaction layer while authorization belongs to runtime safety.
+</Design30>
+
+## AIO Runs Through HTTP
+
+`AioSandboxProvider` (see <SourceRef file="backend/packages/harness/deerflow/community/aio_sandbox/aio_sandbox_provider.py" sha="7e7f0410" symbol="AioSandboxProvider" />) is the container/Pod path. AIO here means an all-in-one sandbox runtime; it is not Python's asyncio.
+
+```text
+AioSandboxProvider.acquire(thread_id)
+  find or create a sandbox container/Pod
+  return AioSandbox(id, base_url)
+
+AioSandbox.execute_command(command)
+  AioSandboxClient(base_url)
+  send an HTTP request
+  AIO API inside the container executes the command
+```
+
+In this mode, the Gateway process holds an HTTP client. The actual command and file operations happen inside the AIO runtime. Side effects stay inside that container or Pod.
+
+```text
+local Docker:
+  Gateway -> LocalContainerBackend -> docker run all-in-one-sandbox
+          -> AioSandboxClient(http://localhost:{port}) -> container shell/file API
+
+remote provisioner:
+  Gateway -> RemoteSandboxBackend -> POST /api/sandboxes
+          -> provisioner creates Pod + Service
+          -> AioSandboxClient(sandbox_url) -> Pod shell/file API
+```
+
+Because bash runs inside the isolated runtime, AIO bash does not need host-bash gating.
+
+## Why Acquire Is Layered
+
+`acquire(thread_id)` does not execute commands. It finds a usable sandbox for the current thread and returns its `sandbox_id`. The path is layered because it handles concurrency, reuse, process restart, and multi-process deployment:
+
+```text
+acquire(thread_id)
+  take the in-process lock for this thread
+  check active cache in this process
+  compute stable sandbox_id from sha256(thread_id)[:8]
+  check warm pool
+  take cross-process file lock
+  backend.discover(sandbox_id)
+  backend.create(...)
+```
+
+Each step handles a different failure mode:
+
+```text
+in-process lock   avoid duplicate creates inside one process
+active cache      reuse a client this process already holds
+stable id         let different processes compute the same resource name
+warm pool         reclaim a released-but-still-running sandbox
+file lock         serialize discover/create across processes
+discover          reconnect to a container/Pod another process created
+create            create only after all reuse paths fail
+```
+
+"Cross-process recovery" does not mean retrieving another process's Python object. It means reconnecting to the same external sandbox resource. The Python client is in-process; the container/Pod is external. A stable `sandbox_id` lets any process rebuild the client.
+
+## Virtual Paths
+
+The model sees a stable virtual filesystem:
+
+```text
+/mnt/user-data/workspace
+/mnt/user-data/uploads
+/mnt/user-data/outputs
+/mnt/skills
+/mnt/acp-workspace
+```
+
+Host paths are separated by user and thread:
+
+```text
+{base_dir}/users/{user_id}/threads/{thread_id}/user-data/workspace
+{base_dir}/users/{user_id}/threads/{thread_id}/user-data/uploads
+{base_dir}/users/{user_id}/threads/{thread_id}/user-data/outputs
+{base_dir}/users/{user_id}/threads/{thread_id}/acp-workspace
+```
+
+Local and AIO implement the virtual layer differently:
+
+```text
+local:
+  Python maps virtual paths to host paths before execution,
+  then masks host paths back to virtual paths in output.
+
+AIO:
+  host directories are mounted into the container,
+  so the container directly sees /mnt/user-data/...
+```
+
+Virtual paths give the model stable coordinates. They are not the isolation boundary. Isolation comes from the provider type, path validation, mount permissions, host-bash gating, and container boundaries.
+
+## Lifecycle
+
+The lifecycle trigger is `SandboxMiddleware` (see <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="7e7f0410" symbol="SandboxMiddleware" />); the policy lives in the provider.
+
+```text
+before_agent
+  eager acquire only when lazy_init=False
+
+first sandbox tool call
+  default lazy_init=True acquires here
+
+after_agent
+  provider.release(sandbox_id)
+
+shutdown
+  provider.shutdown()
+```
+
+Default behavior is lazy. A run that only chats and never touches files may never allocate a sandbox.
+
+Because lazy initialization can happen inside a tool call, `wrap_tool_call` compares the sandbox id before and after the tool. If a new sandbox was created, it wraps the result in a `Command` update:
+
+```python
+Command(update={
+    "sandbox": {"sandbox_id": sandbox_id},
+    "messages": [tool_message],
+})
+```
+
+`release()` is not the same as `destroy()`.
+
+```text
+local:
+  release() is effectively a no-op; LocalSandbox stays cached
+
+AIO:
+  release() removes the active client and parks SandboxInfo in the warm pool
+  destroy() stops the container or deletes the Pod
+  idle checker eventually destroys idle active/warm sandboxes
+```
+
+<Design30>
+Today `sandbox_id` plays two roles: logical sandbox identity for a thread, and physical resource name in Docker/provisioner. `sha256(thread_id)[:8]` makes recovery simple because any process can compute the same name. The tradeoff is lifecycle coupling. If 3.0 wants to preserve logical identity while rebuilding or migrating the physical resource, it would be cleaner to split this into two mappings: `thread -> sandbox identity`, then `sandbox identity -> physical resource`.
+</Design30>
+
+<Philosophy title="Engineering Philosophy">
+
+The sandbox layer works because it separates tool semantics from execution environment. The same `bash`, `read_file`, and `write_file` tools can run against a host adapter, a local container, or a remote Pod.
+
+The cost is that the provider becomes the load-bearing layer. Lazy creation, cross-process recovery, warm pools, idle cleanup, deterministic names, and locks all live there. The hard part is not running a command; it is keeping one conversation mapped to a recoverable execution resource across runs, workers, and restarts.
+
+</Philosophy>
+
+<Tradeoff leftTitle="Why the provider abstraction helps" rightTitle="What it costs">
+  <Fragment slot="left">
+
+  - Tool code is decoupled from local/container/Pod execution.
+  - Graph state stores only `sandbox_id`, so it can be checkpointed.
+  - Lazy creation plus warm pool avoids unnecessary cold starts.
+  - The model sees stable virtual paths instead of host paths.
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - Acquire logic becomes layered and harder to debug.
+  - Local mode is not strong isolation; host bash needs explicit gating.
+  - Virtual paths can be mistaken for a safety boundary.
+  - Logical identity and physical resource lifecycle are currently tightly coupled.
+
+  </Fragment>
+</Tradeoff>
+
+## Key Points
+
+- `state["sandbox"]` stores only `sandbox_id`, not the execution object.
+- A direct `runtime.state["sandbox"] = ...` mutation inside a tool is not enough; persisted graph state needs `Command(update=...)`.
+- Local bash runs on the Gateway host through `subprocess.run`, so it must be gated.
+- AIO bash runs inside a container/Pod through an HTTP API.
+- Virtual paths give stable coordinates, not isolation by themselves.
+- `release()` means the current run lets go; it does not necessarily destroy the sandbox.

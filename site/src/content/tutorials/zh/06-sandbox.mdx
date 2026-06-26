@@ -1,0 +1,399 @@
+---
+lang: zh
+slug: 06-sandbox
+station: 6
+title: 沙箱系统：工具在哪里执行，由谁决定
+sha: 7e7f0410
+sourceRefs:
+  - backend/packages/harness/deerflow/sandbox/tools.py
+  - backend/packages/harness/deerflow/sandbox/middleware.py
+  - backend/packages/harness/deerflow/sandbox/sandbox.py
+  - backend/packages/harness/deerflow/sandbox/sandbox_provider.py
+  - backend/packages/harness/deerflow/sandbox/local/local_sandbox.py
+  - backend/packages/harness/deerflow/sandbox/local/local_sandbox_provider.py
+  - backend/packages/harness/deerflow/community/aio_sandbox/aio_sandbox.py
+  - backend/packages/harness/deerflow/community/aio_sandbox/aio_sandbox_provider.py
+  - backend/packages/harness/deerflow/agents/thread_state.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+同一行 `bash("rm -rf build/")`，在不同 sandbox provider 下，安全含义完全不同。Local 模式会把命令交给 Gateway 所在机器的 shell；AIO 模式则把命令发到容器或 Pod 里的 shell/file API。前者影响的是宿主机环境，后者影响的是隔离出来的执行环境。
+
+`sandbox/tools.py` 里暴露的工具表面上只是文件和命令操作：`bash`、`ls`、`read_file`、`write_file`、`str_replace`。但这一层要回答的是：模型发出的外部操作，最终落在哪个执行环境里，受哪一道边界约束。
+
+前面几站已经讲到工具装配，以及模型如何决定调用工具。这一站继续下探到工具执行层：工具函数执行时，如何找到 sandbox、如何隔离路径、如何管理生命周期。本章的核心判断是：
+
+> 沙箱是工具的执行环境和能力边界。它决定 agent 能碰到哪些外部资源，也决定命令在哪个环境里执行。
+
+<FlowDiagram
+  caption="工具执行链：ToolNode 只负责调用工具，把调用绑定到执行环境的是 ensure_sandbox_initialized 和 provider。"
+  chart={`flowchart TD
+  TC["模型发起 tool call"] --> TN["ToolNode 调用工具函数 · 注入 runtime"]
+  TN --> ESI["ensure_sandbox_initialized(runtime)"]
+  ESI --> SID["读 runtime.state['sandbox'].sandbox_id"]
+  SID --> PROV["provider.get(sandbox_id)"]
+  PROV --> SBX["Sandbox 实例（local / 容器 / Pod）"]
+  SBX --> EXEC["execute_command / read_file / write_file / list_dir"]`}
+/>
+
+## state 只存身份，provider 持有资源
+
+读 sandbox 系统，第一条边界是 state 和资源的边界：graph state 里只保存 `sandbox_id`，不保存能执行命令的对象。
+
+```text
+runtime.state["sandbox"] = {"sandbox_id": "local:thread-123"}
+```
+
+ `state["sandbox"]` 是 `ThreadState` 的一个子状态（schema 见 <SourceRef file="backend/packages/harness/deerflow/agents/thread_state.py" sha="7e7f0410" symbol="ThreadState" />），作用是记录"这个 thread 绑定了哪个 sandbox"。它的 reducer 是 DeerFlow 自己写的 `merge_sandbox`；字段类型通过 `SandboxStateField` 这个别名复用。语义很明确：同一个 thread 只能接受相同 `sandbox_id` 的幂等写入，不能静默合并两个不同 sandbox。
+
+能执行命令、读写文件的 `Sandbox` 实例，由 **sandbox provider** 管理。
+
+为什么要这么拆？因为 graph state 会进入 checkpoint，也可能在另一个进程里恢复。容器连接、httpx client、子进程句柄这些都是进程内运行时资源，不能稳定地序列化进 checkpoint。能持久化的只能是一个稳定的字符串 id；等进程重启，或者请求落到另一个 worker，provider 再按这个 id 找回或重建对应的执行资源。
+
+```text
+sandbox_id        写进 graph state 的资源身份（可序列化、可持久化）
+Sandbox 实例      provider 持有的真实执行对象（运行时资源，不进 state）
+```
+
+<MarginNote>这里的核心原则是：身份可以持久化，连接不能。`sandbox_id` 是可恢复的身份；`Sandbox` 实例是进程内资源，只能由 provider 按需获取。</MarginNote>
+
+还要注意一件事：工具函数里直接写 `runtime.state["sandbox"] = ...`，不等于已经把它写回了 LangGraph 的 graph state。那只是本次工具调用里的局部修改；要让新的 `sandbox_id` 跨节点可见、并进入 checkpoint，需要通过 `Command(update={"sandbox": ...})` 返回。`SandboxMiddleware.wrap_tool_call` 的一个重要职责，就是完成这次持久化更新。
+
+## 两个接口：能执行什么 vs 怎么拿到它
+
+沙箱系统由两个接口组成，它们解决的是两个不同问题。
+
+`Sandbox`（<SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox.py" sha="7e7f0410" symbol="Sandbox" />）回答的是"这个环境能执行哪些操作"：
+
+```text
+execute_command(command)   执行 shell 命令
+read_file(path)            读文件
+write_file(path, content)  写文件
+list_dir(path)             列目录
+glob / grep                查找
+```
+
+`SandboxProvider`（<SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox_provider.py" sha="7e7f0410" symbol="SandboxProvider" />）回答的是"如何拿到、复用、释放一个 sandbox"：
+
+```text
+acquire(thread_id)  为这个 thread 找到或创建一个 sandbox，返回 sandbox_id
+get(sandbox_id)     按 id 拿回 Sandbox 实例
+release(sandbox_id) 释放（不一定销毁）
+shutdown()          进程退出时清理
+```
+
+这里需要提前区分两个容易混淆的术语：
+
+```text
+model provider     提供"模型调用"能力（前面章节出现过）
+sandbox provider   提供"工具执行环境"能力（这一章）
+```
+
+两个都叫 provider，但职责完全不同。后文只要说 provider，都指 sandbox provider。
+
+DeerFlow 自带两套 provider：本地的 `LocalSandboxProvider`，容器/Pod 的 `AioSandboxProvider`。具体使用哪一套，取决于 `config.yaml` 里的 `sandbox.use` 配置。两者的差异，是这一章接下来要展开的主线。
+
+## thread_id 是会话身份，不是线程
+
+继续往下读之前，需要先明确 `thread_id` 的含义。这里的 `thread_id` 指 DeerFlow 里一条会话或任务的业务身份，和 Python 线程、操作系统线程不是一类概念。
+
+三个概念分开摆：
+
+```text
+OS process       一个 Python 服务进程，有自己独立的内存
+Python thread    进程内部的执行单元，共享同一份进程内存
+DeerFlow thread  一条对话/任务的业务身份，也就是 thread_id
+```
+
+`thread_id` 是上游传进来的，而且两条运行路径放的位置不一样，所以沙箱工具两边都查：
+
+```python
+thread_id = runtime.context.get("thread_id")
+if thread_id is None:
+    thread_id = runtime.config.get("configurable", {}).get("thread_id")
+```
+
+`context` 是 Gateway worker 路径使用的位置，`configurable` 是 embedded client 路径使用的位置。两边都查，是为了让同一套 sandbox 工具兼容两种入口。
+
+provider 为什么这么看重 `thread_id`？因为它是"同一条会话复用同一个 sandbox"的稳定依据。进程重启后，内存里的 provider cache 会丢失；但只要上游继续传入同一个 `thread_id`，provider 就有机会重新定位外部 sandbox，而不是给这条会话换一个新环境。
+
+## Local 沙箱：宿主机的适配层，不是强隔离
+
+`LocalSandboxProvider`（<SourceRef file="backend/packages/harness/deerflow/sandbox/local/local_sandbox_provider.py" sha="7e7f0410" symbol="LocalSandboxProvider" />）容易被名字误导。它提供的是宿主机文件系统和宿主机 shell 的适配层，不是强隔离环境。
+
+核心路径：
+
+```text
+LocalSandboxProvider.acquire(thread_id)
+  为这个 thread 创建一套 path mappings
+  返回 LocalSandbox("local:{thread_id}", path_mappings=...)
+
+LocalSandbox.execute_command(command)
+  把虚拟路径解析成宿主机真实路径
+  subprocess.run([shell, "-c", command])
+  把输出里的宿主机路径反向遮回虚拟路径
+```
+
+关键点在 `LocalSandbox.execute_command()`：`bash` 最终走的是 `subprocess.run([shell, "-c", command])`（见 <SourceRef file="backend/packages/harness/deerflow/sandbox/local/local_sandbox.py" sha="7e7f0410" symbol="LocalSandbox.execute_command" />）。也就是说，local 模式下的 bash 运行在 Gateway 进程所在的机器上，用的是那台机器的 shell。它不是容器里的 bash。
+
+文件类工具（read/write/list）一次只做一种受控操作，比如读文件、写文件、列目录；路径会被校验，并限制在允许的根目录下。但 `bash` 不一样：它会把一整段字符串交给 shell 解释。shell 可以串联多个命令、把输出写进文件、读取环境变量、调用系统程序，甚至删除文件、启动进程或访问网络。路径校验只能检查其中一部分文本，无法把宿主机 shell 变成隔离执行环境。所以：
+
+> local 模式的 bash，必须再过一道准入控制（host bash gating），否则等于把宿主机 shell 直接交到模型手上。
+
+这就是 host bash gating 存在的原因：它对宿主机 shell 做显式准入控制，路径校验只是前置保护之一。
+
+## Host bash gating：宿主机 shell 必须显式准入
+
+`is_host_bash_allowed()` 判断两件事：当前 provider 是否是 local，以及配置里是否显式打开 `sandbox.allow_host_bash`。结果只有三种：
+
+```text
+local provider + allow_host_bash=False   拒绝 bash
+local provider + allow_host_bash=True    允许 host bash
+非 local provider（容器/Pod）            bash 在 sandbox 内执行，本就隔离
+```
+
+这道 gating 控制的是宿主机 shell，不是普通文件工具：
+
+```text
+local bash 不是容器里的 bash
+local bash 是 Gateway 进程所在机器上的 shell
+```
+
+路径校验、虚拟路径替换、输出脱敏可以降低误伤，也能阻止一部分路径穿越，但它们不构成强隔离边界。宿主机 shell 的能力远超字符串校验能覆盖的范围。所以 DeerFlow 没有把安全性押在"把 host bash 校验得足够完整"上，默认策略是拒绝，只有显式开启才允许。
+
+路径校验会把 REST 模板里的 `/devices/{id}`、f-string 里的非 ASCII 文本片段这类“看起来像路径、实际只是字符串”的内容排除掉，减少误报。但这只是可用性处理，不改变安全结论：local bash 仍然是宿主机 shell，不能靠字符串校验获得强隔离。
+
+<Design30>
+这里有一处值得在 3.0 重新设计：host bash 的准入属于运行时授权，不属于模型澄清。现在它是静态的 `allow_host_bash` 开关，要么全禁，要么全放。更合理的形态可能是 runtime 级的 approval gate，例如 `sandbox.host_bash_policy: deny | ask | allow`。其中 `ask` 分支应由运行时暂停执行，展示命令、影响范围和风险，等待用户批准，并记录审计事件，不应该复用 `ask_clarification`。澄清处理模型交互，授权处理运行时安全，两者不该混在一起。
+</Design30>
+
+## AIO 沙箱：容器/Pod 里执行，靠 HTTP 遥控
+
+`AioSandboxProvider`（<SourceRef file="backend/packages/harness/deerflow/community/aio_sandbox/aio_sandbox_provider.py" sha="7e7f0410" symbol="AioSandboxProvider" />）是另一条路。AIO 指 All-In-One sandbox runtime，不是 Python 的 asyncio。
+
+核心路径：
+
+```text
+AioSandboxProvider.acquire(thread_id)
+  找到或创建一个 sandbox 容器/Pod
+  返回 AioSandbox(id, base_url)
+
+AioSandbox.execute_command(command)
+  AioSandboxClient(base_url)
+  发一个 HTTP 请求
+  容器内的 AIO API 执行命令
+```
+
+关键差别在这里：执行命令、读写文件的是容器内的 AIO API，不是 Gateway 进程。Gateway 侧持有的是 HTTP client，通过 HTTP 请求调用容器里的 API；命令产生的副作用留在容器/Pod 内。
+
+它有两种落地形态，取决于 Gateway 能够连接到哪类后端：
+
+```text
+本地 Docker：
+  Gateway → LocalContainerBackend → docker run all-in-one-sandbox
+          → AioSandboxClient(http://localhost:{port}) → 容器 shell/file API
+
+远端 provisioner：
+  Gateway → RemoteSandboxBackend → POST /api/sandboxes
+          → provisioner 创建 Pod + Service
+          → AioSandboxClient(sandbox_url) → Pod shell/file API
+```
+
+容器形态下的 bash 不需要 host bash gating，因为它本来就在隔离环境里执行。这也是 AIO 和 local 模式最根本的差别。
+
+### AIO 的 acquire 为什么这么复杂
+
+`acquire(thread_id)` 的目标是为当前 thread 找到一个可用 sandbox，并返回它的 `sandbox_id`。这条路径较长，是因为它同时要处理并发、复用、重启恢复和跨进程部署：
+
+```text
+acquire(thread_id)
+  获取这个 thread 的进程内锁
+  检查当前进程的 active cache
+  用 thread_id 算出稳定的 sandbox_id
+  检查 warm pool
+  获取跨进程 file lock
+  backend.discover(sandbox_id)
+  backend.create(...)
+```
+
+逐项来看，每一步解决的问题都不一样：
+
+```text
+进程内锁         防止同一进程内两个请求同时为同一 thread 创建 sandbox
+active cache     当前进程已经持有 client 时直接复用
+稳定 sandbox_id  sha256(thread_id)[:8]，让不同进程和重启后的进程能算出同一个资源名
+warm pool        release 后暂不销毁的容器池，下轮同 thread 可以快速恢复使用
+file lock        多进程不共享内存，用锁文件把 discover/create 串行化
+discover         当前进程内存里没有，但 Docker/provisioner 里可能已有对应资源，找到后重新连接
+create           前面都失败后，才创建新容器或 Pod
+```
+
+这里有一个容易混淆的点：所谓"跨进程找回"，指的是重新连接同一个外部 sandbox，不是把另一个进程里的 Python 对象拿回来。内存里的 client 不能跨进程共享，但容器/Pod 是外部资源；只要 `sandbox_id` 稳定，任何进程都可以按这个 id 重新建立连接。`sha256(thread_id)[:8]` 这个确定性命名，就是让"同一会话在不同进程、不同重启之后仍指向同一个 sandbox"成立的关键。
+
+<MarginNote>active cache 查的是当前进程内存；discover 查的是 Docker/provisioner 里的外部资源。前者解决进程内复用，后者解决跨进程和重启后的恢复。</MarginNote>
+
+## 路径虚拟化：给模型一套不变的坐标
+
+不管 local 还是 AIO，模型看到的都是同一套稳定的虚拟路径：
+
+```text
+/mnt/user-data/workspace
+/mnt/user-data/uploads
+/mnt/user-data/outputs
+/mnt/skills
+/mnt/acp-workspace
+```
+
+宿主机上的真实目录则按 user 和 thread 分层：
+
+```text
+{base_dir}/users/{user_id}/threads/{thread_id}/user-data/workspace
+{base_dir}/users/{user_id}/threads/{thread_id}/user-data/uploads
+{base_dir}/users/{user_id}/threads/{thread_id}/user-data/outputs
+{base_dir}/users/{user_id}/threads/{thread_id}/acp-workspace
+```
+
+两套 provider 实现虚拟化的手段完全不同：
+
+```text
+local：
+  靠 Python 路径映射
+  /mnt/user-data/workspace/a.py
+    → {base_dir}/users/{user_id}/threads/{thread_id}/user-data/workspace/a.py
+  执行前解析，执行后把宿主机路径遮回虚拟路径
+
+AIO：
+  靠容器挂载
+  宿主机目录被 mount 进容器，容器里本来就能看到 /mnt/user-data/...
+  所以 AIO 通常不需要在 tools.py 里做路径替换
+```
+
+路径虚拟化保护的是模型侧的稳定性：底层无论是 local、容器还是 Pod，模型都只和 `/mnt/user-data/...` 这套路径打交道；工具接口保持统一，宿主机真实路径也不会直接暴露给模型。但这里必须分清一件事：
+
+> 虚拟路径本身不是安全边界。它提供一致坐标和输出脱敏；隔离来自 provider 类型、路径校验、挂载权限、host bash gating 和容器边界，不取决于路径字符串本身。
+
+`thread_id` 和 `user_id` 在拼进真实路径之前都会做字符校验，避免被当成 `../` 之类的路径穿越片段。
+
+## 生命周期：lazy 创建，release 不等于销毁
+
+沙箱的生命周期，触发点在 `SandboxMiddleware`（<SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="7e7f0410" symbol="SandboxMiddleware" />），策略落在 provider。
+
+```text
+before_agent
+  lazy_init=False 时提前 acquire；默认 lazy_init=True，这里不创建 sandbox
+
+第一次 sandbox 工具调用
+  lazy_init=True 时，到这一刻才 acquire
+
+after_agent
+  调 provider.release(sandbox_id)
+
+shutdown
+  调 provider.shutdown()
+```
+
+第一件要记住的事：默认是 lazy 创建。`SandboxMiddleware` 在 `before_agent` 通常不会 acquire sandbox；只有模型第一次调用 sandbox 工具时，才会创建或找回执行环境。一次只聊天、不碰文件的 run，可能从头到尾都不会分配 sandbox。
+
+也正因为 sandbox 可能在工具调用过程中才 lazy 创建，`wrap_tool_call` 才需要做状态补偿：它比较工具执行前后的 `sandbox_id`，如果发现这次调用新建了 sandbox，就把工具结果包装成 `Command`，把新的 `sandbox_id` 写回 graph state：
+
+```python
+Command(update={
+    "sandbox": {"sandbox_id": sandbox_id},
+    "messages": [tool_message],
+})
+```
+
+这正好接回前面的原则：工具里直接改 `runtime.state` 不会稳定持久化；只有通过 `Command(update=...)`，新的 `sandbox_id` 才能被后续节点和 resume 流程看见。
+
+第二件要记住的事：`release()` 不等于 `destroy()`。
+
+```text
+local：
+  release() 是 no-op
+  LocalSandbox 留在 LRU cache，没有容器或 HTTP client 要释放
+
+AIO：
+  release() → 从 active cache 移除、关掉 host 侧 HTTP client、把 SandboxInfo 放进 warm pool
+             容器照常运行
+  destroy() → 停止容器或删除 Pod
+  idle checker → 超过 idle_timeout 的 active/warm sandbox 才被销毁
+```
+
+`release` 表示"当前 run 不再持有这个 sandbox"，不表示销毁执行环境。AIO 会把容器放进 warm pool 继续保留，等同一个 thread 下一轮 run 来时快速复用，避免冷启动。销毁由 idle checker 按超时策略执行。
+
+<Design30>
+现在的 `sandbox_id` 同时承担两层含义：它既是"这个 thread 绑定的逻辑 sandbox 身份"，也是 Docker/provisioner 用来定位物理资源的名字。`sha256(thread_id)[:8]` 让这两层暂时合在一起，好处是任何进程都能从同一个 `thread_id` 算出同一个资源名，跨进程恢复非常直接。代价是逻辑身份和物理资源生命周期被绑在一起：一旦想保留逻辑身份但重建物理容器，或者把一个 thread 迁移到另一个容器，这个重载的 id 就会成为阻力。3.0 可以考虑拆成两层显式映射：`thread → sandbox identity`、`sandbox identity → physical resource`，让复用、回收和迁移都有更清晰的生命周期边界。
+</Design30>
+
+## 工具层：从 LangChain 工具接到 Sandbox 接口
+
+`sandbox/tools.py`（<SourceRef file="backend/packages/harness/deerflow/sandbox/tools.py" sha="7e7f0410" />）是 LangChain 工具和 `Sandbox` 接口之间的适配层。大部分工具走同一个模式：
+
+```text
+ensure_sandbox_initialized(runtime)   把这次调用绑到一个 sandbox（必要时 lazy 创建）
+ensure_thread_directories_exist(...)  确保 thread 目录存在
+if local: 校验路径、把虚拟路径解析成宿主机路径
+调用 sandbox 方法
+格式化 / 截断 / 脱敏输出
+```
+
+`bash` 是其中最特殊的工具，因为 local 模式下它还要经过 host bash gating：
+
+```text
+local bash：
+  host bash gating → 校验命令里的路径 → 替换虚拟路径
+  → cd 到 thread workspace → subprocess shell → 把宿主机路径遮回去
+
+AIO bash：
+  直接走容器 shell API 执行
+```
+
+`write_file` 和 `str_replace` 还会按 `(sandbox_id, path)` 加锁，防止同一个 sandbox 内并发写同一个文件导致互相覆盖。锁的作用域是 `(sandbox_id, path)`，不是单纯的 `path`，所以不同 sandbox 里同名的虚拟路径不会互相阻塞。这个锁保护的是文件一致性，不是安全边界。
+
+`write_file` 默认还有单次非 append 写入的大小上限（80 KB）。这个限制来自模型输出通道：模型必须把整个 tool-call JSON 连续地流式输出；payload 过大容易触发 streaming chunk-gap timeout。换句话说，这是模型输出通道的限制，最终落到了文件工具上。
+
+<Philosophy title="工程设计哲学">
+
+沙箱系统最重要的设计点，是把"工具语义"和"执行环境"拆开。同一套 `bash` / `read_file` / `write_file`，底层可以接宿主机 shell、本地容器，也可以接远端 Kubernetes Pod；模型和上层工具接口不需要关心这些差异。
+
+代价是 provider 成为复杂度集中点：lazy 创建、跨进程复用、warm pool、idle 回收、确定性命名、多层锁，都集中在 provider 里。模型看不到这些细节，但缺少其中任何一块，"同一会话稳定复用同一环境"在多进程部署下就可能失效。沙箱困难的部分不在于执行一条命令，而在于让一条会话稳定映射到一个可复用、可回收、跨进程还能找回的执行资源。
+
+</Philosophy>
+
+<Tradeoff leftTitle="provider 抽象的好处" rightTitle="代价">
+  <Fragment slot="left">
+
+  - 工具代码和执行环境解耦，local / 容器 / Pod 无缝切换
+  - graph state 只存 `sandbox_id`，可持久化、可跨 worker 恢复
+  - lazy 创建加 warm pool，省掉不必要的冷启动
+  - 模型只看稳定虚拟路径，宿主机真实路径被遮掉
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - 复杂度集中在 provider 的 acquire 回退链里，排查要顺着多层缓存看
+  - local 模式不是强隔离，host bash 的安全主要依赖显式准入
+  - 虚拟路径容易被误认为安全边界，其实只是坐标稳定层
+  - 逻辑身份和物理资源目前绑定较紧，后续迁移和重建策略会受限制
+
+  </Fragment>
+</Tradeoff>
+
+## 易误解的要点
+
+- **`state["sandbox"]` 里只有一个 `sandbox_id`，不是执行对象。** 能执行命令的 `Sandbox` 实例在 provider 手里；state 只存 id，是因为活资源序列化不进 checkpoint。
+- **工具里 `runtime.state["sandbox"] = x` 不会持久化。** 那只是本次调用的局部修改；要跨节点、跨 resume 保留下来，必须通过 `wrap_tool_call` 返回 `Command(update=...)`。Sandbox 第一次 lazy 创建后能被记住，依赖的就是这层状态补偿。
+- **local 模式不是强隔离沙箱。** 它的 bash 是 Gateway 所在机器上的 shell（`subprocess.run`）。所以 host bash 默认必须经过 gating，安全不能只靠路径校验。
+- **虚拟路径不是安全边界。** `/mnt/user-data/...` 是给模型的稳定坐标，隔离靠 provider 类型、挂载权限、host bash gating 和容器边界。
+- **`thread_id` 是业务会话身份，不是 Python / OS 线程。** `sha256(thread_id)[:8]` 是稳定的 sandbox 资源名，让同一会话跨进程、跨重启都指向同一个容器。
+- **`release()` 不等于 `destroy()`。** AIO 的 release 把容器放进 warm pool 接着活着，等同一 thread 下一轮复用；销毁交给 idle checker 按超时做。
+- **sandbox provider 不是 model provider。** 两者名称相似，但职责不同：前者管理工具执行环境，后者处理模型调用。
+
+---
+
+这一站把"工具在哪里执行"拆成了几条清晰边界：state 只存身份，provider 管理资源；local 是宿主机适配层，AIO 是容器执行层；路径虚拟化给模型稳定坐标，但不构成安全边界。下一站换个角度：执行环境已经准备好，当主 agent 委派子任务时，子 agent 如何继承同一执行上下文，又如何被限制能力？这就是子 agent 系统要解决的问题。

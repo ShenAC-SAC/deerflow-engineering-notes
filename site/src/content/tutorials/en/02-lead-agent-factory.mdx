@@ -2,8 +2,8 @@
 lang: en
 slug: 02-lead-agent-factory
 station: 2
-title: Lead-agent factory · assembly line, not the brain
-sha: 0fb18e36
+title: Lead-agent factory · assemble an agent graph
+sha: 7e7f0410
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
   - backend/langgraph.json
@@ -16,7 +16,7 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 Your prompt has crossed the frontend, passed through the Gateway, and become a run. Now it reaches `make_lead_agent()`. This stop is about how runtime options plus application config become a runnable LangGraph agent graph.
 
-Hold onto one idea: **this is an assembly line, not the brain.** Reasoning happens later, inside the model-tool-middleware loop. This function only bolts the parts together and hands off the compiled graph. It does not even run the graph itself.
+Hold onto one idea: **this function assembles runtime options and application config into an agent graph.** Reasoning happens later, inside the model-tool-middleware loop. This function only bolts the parts together and hands off the compiled graph. It does not even run the graph itself.
 
 <FlowDiagram
   caption="How a run reaches a compiled agent graph"
@@ -31,13 +31,13 @@ Hold onto one idea: **this is an assembly line, not the brain.** Reasoning happe
 
 ## One factory, two entry points
 
-Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. The underscore is not cosmetic: it marks the most important boundary in the file.
+Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. The underscore is not cosmetic: it marks the most important boundary in the file.
 
-**`make_lead_agent(config)`** takes a single argument because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="0fb18e36" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
+**`make_lead_agent(config)`** takes a single argument because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="7e7f0410" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
 
-**`_make_lead_agent(config, *, app_config)`** is the real assembly function. That `*` makes `app_config` keyword-only — because both arguments are "config-like," and positional calls are too easy to confuse. Its work is deterministic: build the graph, step by step, from runtime options plus application config.
+**`_make_lead_agent(config, *, app_config)`** is the actual assembly function. That `*` makes `app_config` keyword-only — because both arguments are "config-like," and positional calls are too easy to confuse. Its work is deterministic: build the graph, step by step, from runtime options plus application config.
 
-<MarginNote>The underscore enforces nothing in Python. Here it still carries real meaning: the outer function handles compatibility, and the inner function does the work.</MarginNote>
+<MarginNote>The underscore enforces nothing in Python. Here it still marks a useful boundary: the outer function handles compatibility, and the inner function does the assembly work.</MarginNote>
 
 ## How the runtime options get assembled
 
@@ -96,7 +96,7 @@ Why does `make_lead_agent` exist in such an awkward shape? Because it serves sev
 
 `app_config` being retrievable from runtime config *and* having a global fallback is exactly that awkwardness: it lets the Gateway inject a hot-loaded config snapshot **without breaking the LangGraph Server ABI**.
 
-The real lesson: **keep compatibility boundaries explicit, and keep them in one place.** Funnel all the awkwardness into a single, clearly named adapter, and let the real assembly stay deterministic and clean. That beats sprinkling compatibility logic everywhere.
+The design lesson: **keep compatibility boundaries explicit, and keep them in one place.** Funnel all the awkwardness into a single, clearly named adapter, and let the main assembly path stay deterministic and clean. That beats sprinkling compatibility logic everywhere.
 
 </Philosophy>
 
@@ -126,4 +126,4 @@ The real lesson: **keep compatibility boundaries explicit, and keep them in one 
 
 ---
 
-That is the assembly line. Its best quality is being **boring**: deterministic, predictable, and free of hidden surprises. Before we take apart middleware, the next stop looks at tool assembly, because what the model can call decides what this graph can actually do.
+That is the assembly line. Its best quality is being **boring**: deterministic, predictable, and free of hidden surprises. The next stop looks at tool assembly, because what the model can call decides what this graph can do.

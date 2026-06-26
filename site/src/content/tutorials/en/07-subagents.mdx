@@ -1,0 +1,275 @@
+---
+lang: en
+slug: 07-subagents
+station: 7
+title: "Subagent system: delegating complex work to constrained agents"
+sha: 7e7f0410
+sourceRefs:
+  - backend/packages/harness/deerflow/tools/builtins/task_tool.py
+  - backend/packages/harness/deerflow/subagents/executor.py
+  - backend/packages/harness/deerflow/subagents/registry.py
+  - backend/packages/harness/deerflow/subagents/config.py
+  - backend/packages/harness/deerflow/subagents/builtins/general_purpose.py
+  - backend/packages/harness/deerflow/subagents/builtins/bash_agent.py
+  - backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py
+  - backend/packages/harness/deerflow/skills/tool_policy.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+A lead agent often meets a subtask that would consume too many steps or too much context: scan the whole repository, inspect many files, run commands, and return a distilled finding. DeerFlow exposes that pattern through the `task` tool. From the lead agent's point of view it is a normal tool call. Behind that tool call, DeerFlow creates another full agent and runs it in the background.
+
+The key idea:
+
+> A subagent is another full agent created by the same `create_agent` factory. It inherits the parent's work context, but receives a narrower tool surface, a shorter lifecycle, and a controlled result path so it can handle complex work without polluting the lead agent's loop.
+
+<FlowDiagram
+  caption="Three layers: create_agent is called once for the lead agent and once for the subagent. task_tool sits between them as a scheduling tool."
+  chart={`flowchart TD
+  LEAD["1. lead agent: create_agent first call"] --> AM["2. after_model: SubagentLimit trims to <= 3"]
+  AM --> TN["3. tools node executes task_tool"]
+  TN --> TT["4. task_tool builds executor, polls, wraps result"]
+  TT --> SUB["5. create_agent second call creates subagent"]
+  SUB -.->|"extract final text"| BACK["task_tool returns string -> ToolNode wraps ToolMessage"]`}
+/>
+
+## Three Layers
+
+The system is easiest to read if you keep three layers separate:
+
+```text
+1. lead agent
+   created by create_agent
+   has a tools node that includes the task tool
+
+2. task_tool
+   a normal async @tool function
+   starts background execution, polls status, streams progress, returns a string
+
+3. subagent
+   another graph created by create_agent
+   runs its own agent loop
+```
+
+`create_agent` is called twice in this path: once to create the lead agent, and once to create the subagent. `task_tool` is not an agent. It is the adapter that turns one tool call into a background agent execution.
+
+<MarginNote>Subagent creation does not happen inside before_model or after_model. It happens when ToolNode executes `task_tool`. Middleware can limit the request before the tool runs; subagent creation belongs to the tool path.</MarginNote>
+
+## Admission Control
+
+Before the tool path creates subagents, `SubagentLimitMiddleware` (see <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py" sha="7e7f0410" symbol="SubagentLimitMiddleware" />) gets a chance to trim the model's tool calls.
+
+It runs in `after_model`, after the model has produced an `AIMessage` but before the tools node executes. If the model emits more than `MAX_CONCURRENT_SUBAGENTS` task calls, DeerFlow keeps only the allowed number.
+
+```text
+SubagentLimitMiddleware.after_model   decides how many task calls may proceed
+task_tool body                        creates and schedules the subagent
+```
+
+The default cap is 3. That does not mean DeerFlow has an independent task planner. The model and prompt still decide how to split work; the middleware only prevents too many subagents from being launched at once.
+
+## Inherit And Sever
+
+The design tension is simple: the subagent must inherit enough context to be useful, but lose enough capability to stay bounded.
+
+```text
+Inherited context                         Severed capability
+------------------------------------      ------------------------------------
+sandbox       same execution env          no task tool: subagent_enabled=False
+thread_data   same file context           checkpointer=False: no resume/archive
+thread_id     same conversation id        fresh state per task
+```
+
+The inherited side starts in <SourceRef file="backend/packages/harness/deerflow/tools/builtins/task_tool.py" sha="7e7f0410" symbol="task_tool" />. `task_tool` reads `sandbox`, `thread_data`, and `thread_id` from the parent runtime, then passes them to `SubagentExecutor`. The executor places them into the subagent's initial state and run config. This is why a subagent can read the same workspace and execute in the same sandbox as the lead.
+
+The severed side has three parts:
+
+```text
+No task tool
+  task_tool calls get_available_tools(..., subagent_enabled=False).
+  This prevents recursive delegation.
+
+checkpointer=False
+  The subagent is a one-shot execution unit.
+  It does not participate in the lead agent's resume path.
+
+Fresh state
+  Each task gets its own messages and promoted-tool state.
+  Parallel subagents do not share their internal conversation histories.
+```
+
+<Design30>
+Today `subagent_enabled=False` carries two meanings: whether an agent can delegate, and whether the `task` tool appears in the tool list. Those are related but not identical concepts. A cleaner 3.0 design could make delegation capability a first-class policy, with tool visibility derived from that policy rather than used as the policy itself.
+</Design30>
+
+## Why ThreadState Is Reused
+
+Subagents use the same `ThreadState` schema as the lead agent. That is not for returning a ToolMessage to the parent. It is because the subagent itself is a full agent that may run sandbox tools.
+
+```text
+subagent tools need state["sandbox"] and state["thread_data"]
+ThreadState declares those fields
+therefore the subagent can reuse ThreadState
+```
+
+Schema is the set of slots; inheritance is how values are placed into those slots. The result path is separate and appears later.
+
+## Tool Permissions
+
+The subagent's tool set is built through three filters. Each one narrows the set; none of them expands authority.
+
+```text
+parent tool scope
+   -> filter 1: inherit parent tool_groups and remove task via subagent_enabled=False
+candidate tools
+   -> filter 2: subagent config allow/deny
+role-specific tools
+   -> filter 3: skill allowed-tools policy
+final tools
+   -> then append deferred tool_search over the already-filtered catalog
+```
+
+The deferred `tool_search` tool is intentionally assembled after policy filtering (see <SourceRef file="backend/packages/harness/deerflow/subagents/executor.py" sha="7e7f0410" symbol="SubagentExecutor._build_initial_state" />). Its catalog is built from the filtered tools, so it cannot reveal a tool that the policy denied.
+
+## Skills
+
+Skills are handled in two phases: permission first, content loading second.
+
+The permission merge in <SourceRef file="backend/packages/harness/deerflow/tools/builtins/task_tool.py" sha="7e7f0410" symbol="_merge_skill_allowlists" /> keeps the child inside the parent's allowed set:
+
+```text
+parent is None       use the subagent's config.skills
+child is None        inherit the parent's whole allowlist
+both are present     use intersection: child requested AND parent allowed
+```
+
+Loading in <SourceRef file="backend/packages/harness/deerflow/subagents/executor.py" sha="7e7f0410" symbol="SubagentExecutor._load_skills" /> has three different meanings:
+
+```text
+config.skills = None        load all enabled skills
+config.skills = []          load no skills
+config.skills = ["a", "b"]  load only those enabled skills
+```
+
+Each skill is first represented as a temporary `SystemMessage`, but those messages are not inserted as separate conversation messages. `_build_initial_state` joins the configured system prompt, skill contents, and deferred tool note into one final `SystemMessage`. This avoids APIs that reject multiple system messages.
+
+```text
+state["messages"] = [
+  SystemMessage(system_prompt + skills + deferred-tool note),
+  HumanMessage(task),
+]
+```
+
+The tool schemas themselves are not in messages. They are bound to the model through the `tools` parameter passed to `create_agent`. Deferred tool names appear in the prompt only as a lightweight note; full schemas remain hidden until promotion.
+
+## Configuration Sources
+
+`get_subagent_config(subagent_type)` resolves a `SubagentConfig` from two main sources:
+
+```text
+built-in types: general-purpose / bash
+  defined in Python under subagents/builtins
+  system_prompt is a source-code string
+
+custom agents
+  defined in config.yaml under subagents.custom_agents
+  system_prompt comes from config
+
+per-agent overrides
+  config.yaml subagents.agents
+  may override timeout_seconds, max_turns, model, skills
+  does not override built-in system_prompt
+```
+
+So the built-in subagent prompts are intentionally stable. To change one, either edit source or define a custom agent type.
+
+The built-in `general-purpose` subagent defaults to `max_turns=150`, while `bash` has its own built-in cap. A global `subagents.max_turns` setting overrides those built-in values. `SubagentConfig.timeout_seconds=900` is the bare fallback; for built-ins the effective timeout usually comes from global `subagents.timeout_seconds` (default 1800 seconds).
+
+## Background Execution
+
+The runtime shape is more complex than the concept:
+
+```text
+task_tool coroutine
+  stays on the parent event loop and polls every 5 seconds
+
+execute_async
+  submits work to _scheduler_pool, returns task_id immediately
+
+subagent coroutine
+  runs on a long-lived isolated event loop in a daemon thread
+```
+
+The shared state table is `_background_tasks[task_id] -> SubagentResult`. The background side writes status, AI message snapshots, token usage, and final result. `task_tool` reads that object while polling, writes custom stream events with `get_stream_writer()`, and eventually returns a string.
+
+Cancellation is cooperative:
+
+```text
+request_cancel_background_task sets a threading.Event
+_aexecute checks it at agent.astream iteration boundaries
+long tool calls may not stop until the next yielded chunk
+```
+
+Timeout also writes a terminal status through `try_set_terminal`, whose lock ensures only the first terminal result wins.
+
+## Returning To The Lead
+
+The result path is separate from the subagent's internal state.
+
+```text
+subagent finishes
+  extract text from the final AIMessage
+  store it in result.result
+
+task_tool
+  returns a plain string: "Task Succeeded. Result: ..."
+
+ToolNode
+  wraps that string into a ToolMessage with the original tool_call_id
+```
+
+The lead does not receive the subagent's full message history. Because `checkpointer=False`, that exploration history is not persisted as a resumable graph state. The only thing that returns is the distilled text result.
+
+This is what the task tool means by preserving context through separate exploration: the subagent may perform a long, noisy investigation, while the lead receives only the final answer.
+
+<Philosophy title="Engineering Philosophy">
+
+The strong part of the design is that subagents reuse the normal agent factory. There is no second agent architecture. DeerFlow changes the parts: inherited sandbox context, narrower tools, no recursive task tool, no checkpointer, fresh state, and background execution.
+
+The cost is coupling around the runtime boundary. Delegation capability and tool visibility share one flag; background task state is process-local; cancellation is cooperative; cross-process task management is not first-class. These are reasonable tradeoffs under the current runtime constraints. They are also the places a future design would need to separate responsibilities.
+
+</Philosophy>
+
+<Tradeoff leftTitle="Why reuse create_agent" rightTitle="What it costs">
+  <Fragment slot="left">
+
+  - Subagents share the same graph, tool, and middleware model as the lead.
+  - They inherit the execution context needed to work on the same workspace files.
+  - Tool and skill policies only narrow authority.
+  - The lead context receives a compact result instead of the whole exploration.
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - Delegation capability and tool visibility are coupled through `subagent_enabled`.
+  - Background execution relies on threads, a long-lived loop, and polling.
+  - Cancellation is cooperative and can be delayed by long tool calls.
+  - Task state is process-local rather than a first-class persistent runtime object.
+
+  </Fragment>
+</Tradeoff>
+
+## Key Points
+
+- `task_tool` is a tool, not an agent.
+- A subagent is another graph created by `create_agent`.
+- `SubagentLimitMiddleware` trims excessive task calls; it does not create subagents.
+- Subagents inherit `sandbox`, `thread_data`, and `thread_id`, but lose the task tool and checkpointing.
+- `ThreadState` is reused so subagent tools can read sandbox and thread data.
+- Tool policy is a narrowing funnel: parent scope, subagent config, skill allowed-tools.
+- The lead receives a ToolMessage created from the string returned by `task_tool`, not the subagent's internal state.
+- Built-in prompts are source-defined; per-agent config can tune timeout, max turns, model, and skills, but not replace the built-in prompt.

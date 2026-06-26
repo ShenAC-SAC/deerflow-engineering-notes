@@ -60,10 +60,10 @@ for (const file of walk(srcDir)) {
 }
 
 // 2) 地图/正文一致性
-// 2a) 解析 journey.ts(单行格式:station: N, slug: '...', risk: N, altitude: '...', status: '...')
+// 2a) 解析 journey.ts(单行格式:station: N, slug: '...', status: '...')
 const journeySrc = readFileSync(journeyPath, 'utf8');
 const stationRe =
-  /station:\s*(\d+),\s*slug:\s*'([^']+)',\s*risk:\s*\d+,\s*altitude:\s*'[^']+',\s*status:\s*'(published|locked)'/g;
+  /station:\s*(\d+),\s*slug:\s*'([^']+)',\s*status:\s*'(published|locked)'/g;
 const journey = new Map(); // station -> { slug, status }
 for (const m of journeySrc.matchAll(stationRe)) {
   journey.set(Number(m[1]), { slug: m[2], status: m[3] });

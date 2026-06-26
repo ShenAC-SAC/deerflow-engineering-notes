@@ -2,8 +2,8 @@
 lang: zh
 slug: 02-lead-agent-factory
 station: 2
-title: lead-agent 工厂 · 装配线不负责思考
-sha: 0fb18e36
+title: lead-agent 工厂 · 把配置装配成 agent 图
+sha: 7e7f0410
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
   - backend/langgraph.json
@@ -16,7 +16,7 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 上一章里，用户输入已经被 Gateway 登记成一次 run。现在它进入 `make_lead_agent()`：这一章看 DeerFlow 如何把「运行时选项 + 应用配置」装配成一张可运行的 LangGraph agent 图。
 
-先记住一件事，后面所有细节都围绕它展开：**这里是装配线，不负责思考。** 真正的推理发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去。它装完就退场，连图都不亲自执行。
+先记住一件事，后面所有细节都围绕它展开：**这里负责把运行时选项和应用配置装配成 agent 图。** 推理发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去，自己不执行图。
 
 <FlowDiagram
   caption="一次 run 怎么走到一张编译好的 agent 图"
@@ -31,17 +31,17 @@ import SourceRef from '../../../components/SourceRef.astro';
 
 ## 一个函数，两个名字
 
-打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="0fb18e36" />，你会看到一对长得很像的函数：`make_lead_agent()` 和 `_make_lead_agent()`。那个下划线不是装饰，它划出了整篇最重要的一条边界。
+打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" />，你会看到一对名字很接近的函数：`make_lead_agent()` 和 `_make_lead_agent()`。那个下划线不是装饰，它划出了整篇最重要的一条边界。
 
-**`make_lead_agent(config)`** 只收一个参数，因为 LangGraph Server 要求图工厂必须能「只凭一个 config」被调起（见 <SourceRef file="backend/langgraph.json" sha="0fb18e36" />）。它干的活很轻：解析出 `AppConfig`（优先用运行时注入的，回退到 `get_app_config()`），然后把活转交给下划线版本。它是**兼容适配器**。
+**`make_lead_agent(config)`** 只收一个参数，因为 LangGraph Server 要求图工厂必须能「只凭一个 config」被调起（见 <SourceRef file="backend/langgraph.json" sha="7e7f0410" />）。它的职责很薄：解析出 `AppConfig`（优先使用运行时注入的配置，回退到 `get_app_config()`），然后把装配工作交给下划线版本。它是**兼容适配器**。
 
-**`_make_lead_agent(config, *, app_config)`** 才是真正的装配函数。那个 `*` 把 `app_config` 设成只能按关键字传——因为两个参数语义上都像 config，位置传参太容易搞混。它做的是确定性的事：从运行时选项 + 应用配置，一步步把图组装出来。
+**`_make_lead_agent(config, *, app_config)`** 是实际的装配函数。那个 `*` 把 `app_config` 设成只能按关键字传——因为两个参数语义上都像 config，位置传参太容易搞混。它做的是确定性的事：从运行时选项 + 应用配置，一步步把图组装出来。
 
 <MarginNote>下划线在 Python 里没有任何强制力，只是一种约定。但这里它确实有讲究：外层函数处理兼容，内层函数负责装配。</MarginNote>
 
 ## 运行选项是怎么拼出来的
 
-`_get_runtime_config()` 把 `config["configurable"]` 和 `config["context"]` 合并。注意这**不是数学并集**，而是有顺序的：先铺 `configurable`，再让 `context` 覆盖同名键。
+`_get_runtime_config()` 把 `config["configurable"]` 和 `config["context"]` 合并。注意这里有明确的覆盖顺序：先铺 `configurable`，再让 `context` 覆盖同名键。
 
 它读出的核心字段是**每次 run 的选项**，不是全局应用设置：
 
@@ -92,11 +92,11 @@ Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
 
 <Philosophy>
 
-为什么 `make_lead_agent` 要这么绕？因为它同时要兼容好几个宿主：官方 LangGraph Server / Studio、DeerFlow Gateway、嵌入式客户端、测试，还要兼容「老的 `configurable`」和「新的 `context`」两套约定。
+为什么 `make_lead_agent` 要多这一层？因为它同时要兼容好几个宿主：官方 LangGraph Server / Studio、DeerFlow Gateway、嵌入式客户端、测试，还要兼容「老的 `configurable`」和「新的 `context`」两套约定。
 
 `app_config` 既能从运行时 config 里取，又能全局回退。这条绕路，是为了在**不破坏 LangGraph Server ABI** 的前提下，让 Gateway 注入一份热加载的配置快照。
 
-真正的教训是：**兼容边界要显式、要单点。** 把所有兼容逻辑集中塞进一个命名清楚的适配函数，让真正的装配保持确定、干净。这比把兼容逻辑撒得到处都是，可维护得多。
+设计要点是：**兼容边界要显式、要单点。** 把所有兼容逻辑集中到一个命名清楚的适配函数里，让主体装配逻辑保持确定、清晰。这比让兼容逻辑散落在多处更容易维护。
 
 </Philosophy>
 
@@ -117,13 +117,13 @@ Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
   </Fragment>
 </Tradeoff>
 
-## 会绊倒你的地方
+## 易误解的要点
 
-- **`cfg` 是个重载名。** 它装着每次 run 的选项，也可能混进 `app_config`、`thread_id`、`run_id` 这类基础设施字段。看到 `cfg` 别想当然。
-- **`config` 会被就地修改。** 工厂往里塞 `metadata` 和 `callbacks`，别把它当只读对象。
-- **bootstrap 和自定义 agent 容易混。** `setup_agent` 只在 bootstrap 流程出现；`update_agent` 只在已有自定义 agent 的对话里。认错了就调错工具。
+- **`cfg` 是个重载名。** 它装着每次 run 的选项，也可能混进 `app_config`、`thread_id`、`run_id` 这类基础设施字段。看到 `cfg` 时，不要只按变量名判断它的语义。
+- **`config` 会被就地修改。** 工厂会写入 `metadata` 和 `callbacks`，不要把它当只读对象。
+- **bootstrap 和自定义 agent 容易混。** `setup_agent` 只在 bootstrap 流程出现；`update_agent` 只在已有自定义 agent 的对话里。如果混淆这两个场景，就会暴露错误的工具。
 - **中间件顺序在别处装配，却是最终行为的一部分。** 改这条装配线，可能无意中改了运行语义——这会在中间件章节展开。
 
 ---
 
-装配线看完了。它最大的好处，恰恰是**无聊**——行为确定、可预测、不自作主张。下一章先不急着拆中间件，而是看工具列表如何被筛出来；因为模型能调用什么，决定了这张图实际能做什么。
+装配线的价值在于**确定性**：它按配置组装图，不在这里做推理，也不临时改变策略。下一章先看工具列表如何被筛出来；因为模型能调用什么，决定了这张图实际能做什么。

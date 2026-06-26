@@ -1,0 +1,318 @@
+---
+lang: zh
+slug: 07-subagents
+station: 7
+title: 子 agent 系统：把复杂子任务委派给受限 agent
+sha: 7e7f0410
+sourceRefs:
+  - backend/packages/harness/deerflow/tools/builtins/task_tool.py
+  - backend/packages/harness/deerflow/subagents/executor.py
+  - backend/packages/harness/deerflow/subagents/registry.py
+  - backend/packages/harness/deerflow/subagents/config.py
+  - backend/packages/harness/deerflow/subagents/builtins/general_purpose.py
+  - backend/packages/harness/deerflow/subagents/builtins/bash_agent.py
+  - backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py
+  - backend/packages/harness/deerflow/skills/tool_policy.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+主 agent 执行过程中，经常会遇到占用上下文、消耗多个步骤的子任务，比如"遍历整个 repo，找出所有还在使用某个废弃接口的地方"。它可以自己继续分析，也可以调用 `task` 工具，把这件事委派给一个子 agent。从主 agent 的视角看，这只是一次普通工具调用；但在 `task` 工具背后，DeerFlow 会创建另一个完整 agent，并让它在后台独立执行。
+
+上一站讲的是执行环境：sandbox 决定工具在哪里执行、能访问什么。这一站看的是委派：主 agent 如何把一部分工作交给另一个 agent，同时避免权限扩散、上下文污染和无限递归。先澄清一个常见直觉：
+
+> 子 agent 是用同一个 `create_agent` 工厂创建出来的另一个完整 agent。它继承主 agent 的执行上下文，但工具范围更窄、生命周期更短、结果回流更受控，用来承接会消耗上下文和步骤数的复杂子任务。
+
+<FlowDiagram
+  caption="三层结构：create_agent 被调用两次（创建 lead、创建 subagent）；夹在中间的 task_tool 是调度工具，不是 agent。"
+  chart={`flowchart TD
+  LEAD["① lead agent · create_agent 第一次"] --> AM["② after_model · SubagentLimit 裁到 ≤3"]
+  AM --> TN["③ tools node 执行 task_tool（在 wrap_tool_call 最里层）"]
+  TN --> TT["④ task_tool 函数体 · 建 executor / 轮询 / 包结果"]
+  TT --> SUB["⑤ create_agent 第二次 · 创建 subagent"]
+  SUB -.->|"提取最终文本"| BACK["task_tool 返回字符串 → ToolNode 包成 ToolMessage 交回 lead"]`}
+/>
+
+## 三个层次：lead、task_tool、subagent
+
+读这套系统时，最容易混在一起的是三样东西：lead agent、`task_tool`、subagent。先区分它们的层次：
+
+```text
+① lead agent     ← create_agent 造的 graph（第一次调 create_agent）
+     它的 tools node 注册了一个叫 task 的工具
+     │  模型决定调 task
+     ▼
+② task_tool      ← 一个 @tool 装饰的普通 async 函数，不是 agent、不是 graph
+     角色是调度适配层：建 executor、启动后台任务、轮询状态、返回字符串结果
+     │  内部：executor → _aexecute → _create_agent → create_agent
+     ▼
+③ subagent       ← create_agent 造的另一个 graph（第二次调 create_agent）
+```
+
+所以 `create_agent` 在这条链路里被调用两次：一次创建 lead，一次创建 subagent。夹在中间的 `task_tool` 只是一个工具函数，不是 lead，也不是 subagent。
+
+这也解释了一个常见困惑：为什么 `task_tool` 里会有轮询、超时、stream writer、后台任务清理这些代码？因为它处在主 agent 和 subagent 之间，负责把一次工具调用转换成一次后台 agent 执行。lead 和 subagent 各自在自己的 graph 里执行 agent loop；`task_tool` 则负责调度、观察和收尾。
+
+<MarginNote>创建 subagent 不发生在 before/after_model hook 里，而发生在 tools node 执行 `task_tool` 时。hook 只决定"是否允许委派、允许几个 task 进入工具节点"；对 middleware 来说，创建过程属于工具内部行为。</MarginNote>
+
+## 准入：after_model 先裁剪，再进入工具节点
+
+模型决定调用 `task` 之后，到创建 subagent 之间，还隔着一道限制：`SubagentLimitMiddleware`（<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py" sha="7e7f0410" symbol="SubagentLimitMiddleware" />）。
+
+它注册在 `after_model`，处理的是模型刚生成、带有 `task` tool call、但工具尚未执行的那条 `AIMessage`。它的职责很窄：如果模型一次想发起超过 `MAX_CONCURRENT_SUBAGENTS`（默认 3）个 task，就把多余的 tool call 裁剪掉。
+
+这里需要区分两件事：
+
+```text
+SubagentLimitMiddleware.after_model   只决定"允许几个 task 进入工具节点"
+task_tool 函数体（在 tools node 里）   创建并调度 subagent
+```
+
+它只看 `messages[-1]`，裁剪时保留原 message id，让 reducer 替换原来的 `AIMessage`，而不是追加一条新消息。默认上限是 3，但这不意味着系统会主动把任务拆成 3 份；任务怎么切，主要仍由 prompt 和模型判断，DeerFlow 没有独立的任务拆分器。
+
+## 继承什么，切断什么
+
+整套设计的核心取舍在这里：subagent 必须继承足够多的父级上下文，才能完成工作；同时又必须切断一部分能力，避免失控。一张表说清：
+
+```text
+继承下去（复用同一执行上下文）       切断掉（保持有界 / 安全）
+──────────────────────────         ──────────────────────────
+sandbox       同一执行环境          无 task 工具    subagent_enabled=False → 不能继续委派
+thread_data   同一批文件上下文      checkpointer    =False → 一次性、不存档、不 resume
+thread_id     同一会话身份          独立 state      每个 task 全新 state → 并行不互相污染
+```
+
+继承这一侧（<SourceRef file="backend/packages/harness/deerflow/tools/builtins/task_tool.py" sha="7e7f0410" symbol="task_tool" />）：`task_tool` 从 `runtime.state` 和 runtime context 里取出 `sandbox`、`thread_data`、`thread_id`，交给 executor；executor 再把这些值写入 subagent 的初始 state 和 run config。这样 subagent 不是冷启动：当主 agent 委派它读取 workspace、运行 bash、分析文件时，它看到的是同一个 sandbox 和同一批 thread 文件。
+
+切断这一侧有三道：
+
+```text
+无 task 工具
+  task_tool 为 subagent 组装工具时固定传入 subagent_enabled=False。
+  否则 subagent 可以继续委派 subagent，递归委派会让一次请求扩散成不可控的 agent 树。
+
+checkpointer=False
+  subagent 是一次性执行单元，不参与主 agent 的 resume 流程。
+  它不接入主 agent 的 checkpoint，避免把中间探索过程写入持久状态。
+
+独立 state
+  每个 task 都有全新 state。并行 subagent 各自拥有自己的 messages 和工具 promotion 状态，避免互相污染。
+```
+
+<Design30>
+递归委派目前通过 `subagent_enabled=False` 切断。这个开关同时承担了两件事：它既表示"这个 agent 是否具备委派能力"，也影响 `task` 工具是否出现在工具列表里。能力策略和工具可见性被耦合在同一个标志上。3.0 可以考虑把两者拆开：委派能力应该是独立策略，`task` 工具是否暴露只是这个策略的一种结果，而不是用工具开关反推能力边界。
+</Design30>
+
+## 为什么子 agent 复用 ThreadState
+
+子 agent 的 `state_schema` 跟 lead 一样是 `ThreadState`。原因在于 subagent 自己也要运行工具，而不是为了把结果包成 ToolMessage 回传：
+
+```text
+subagent 自己也是完整 agent，内部要调用 bash / read_file / write_file，
+这些工具要读 state["sandbox"]、state["thread_data"]，
+所以它的 state schema 必须有这些字段 → 复用 ThreadState。
+```
+
+可以把 schema 理解成状态插槽，继承则是向这些插槽写入值。正因为 `ThreadState` 声明了 `sandbox` 和 `thread_data`，父级传下来的 `sandbox_state` 和 `thread_data` 才能进入 subagent 的初始状态。结果如何交回 lead 是另一条路径，和 state schema 不是一回事。
+
+## 工具：三层过滤
+
+子 agent 能用哪些工具，来自父级工具范围和三层过滤。每一层都只收窄权限，不扩大权限：
+
+```text
+父级工具范围
+   ▼ 过滤①：继承父 tool_groups
+     task_tool 把 parent_tool_groups 传给 get_available_tools；同时 subagent_enabled=False 摘掉 task
+全套候选（权限天花板不超过父级）
+   ▼ 过滤②：subagent 自己的 allow / deny
+     _filter_tools(config.tools, config.disallowed_tools)
+该 subagent 类型允许的工具
+   ▼ 过滤③：skill 的 allowed-tools
+     filter_tools_by_skill_allowed_tools（skills/tool_policy.py）
+最终 subagent 能用的工具
+   ▼ 之后才追加 deferred 的 tool_search
+```
+
+三层过滤各自负责不同边界：
+
+```text
+过滤①  父级边界：子 agent 的权限不会高过主 agent
+过滤②  类型边界：这类 subagent 可以使用哪些工具
+过滤③  skill 边界：当前 skill 声明只准使用哪些工具
+```
+
+deferred 的 `tool_search` 工具是故意在三层过滤之后才追加的（<SourceRef file="backend/packages/harness/deerflow/subagents/executor.py" sha="7e7f0410" symbol="SubagentExecutor._build_initial_state" />）。它的工具目录基于已经过滤过的工具列表生成，所以不会反向暴露被策略拒绝的工具。MCP 工具的完整 schema 先隐藏，模型通过 `tool_search` 选中后再 promote；这套节省 token 的逻辑和 lead agent 一致。
+
+## skill：权限取交集，内容注入消息
+
+skill 分两层处理：先决定允许哪些 skill 参与（权限策略），再把 skill 内容加载进 subagent 的初始消息。
+
+权限这一步（<SourceRef file="backend/packages/harness/deerflow/tools/builtins/task_tool.py" sha="7e7f0410" symbol="_merge_skill_allowlists" />）会和父级 allowlist 取交集，保证 subagent 不能越权：
+
+```text
+父级没限制（parent=None）  →  使用 subagent 自己的 config.skills
+subagent 没指定（child=None） →  继承父级整个 allowlist
+两边都有                   →  取交集：subagent 想要的 ∩ 父级准许的
+```
+
+加载这一步（<SourceRef file="backend/packages/harness/deerflow/subagents/executor.py" sha="7e7f0410" symbol="SubagentExecutor._load_skills" />），`config.skills` 有三种状态，尤其 `None` 和 `[]` 不是一回事：
+
+```text
+config.skills = None        →  加载所有启用的 skill
+config.skills = []          →  一个都不加载（空列表 = 明确不要，不是"全给"）
+config.skills = ["a", "b"]  →  只加载这两个（前提它们也启用了）
+```
+
+内容注入这一步容易混淆。每个 skill 会先被包成一条临时 `SystemMessage`：
+
+```python
+SystemMessage(content=f'<skill name="{skill.name}">\n{content}\n</skill>')
+```
+
+但这些临时对象不会原样进入对话。实际组装发生在 `_build_initial_state`：它把 `config.system_prompt`、各 skill 正文、deferred 工具说明，用 `\n\n` 拼成最终的一条 `SystemMessage`。
+
+所以要把两层"system prompt"分清：
+
+```text
+config.system_prompt（一个配置字符串）
+  →  skill 内容【不】拼进这个字符串
+
+最终发给模型的那条 SystemMessage（实际出去的）
+  →  内容 = config.system_prompt + 各 skill 正文 + deferred 点名，拼在一起
+  →  skill 内容【在】这条里，接在 system_prompt 后面
+```
+
+为什么需要合并成一条？因为有些 LLM API 不接受多条 `SystemMessage`（"System message must be at the beginning."）。
+
+## 最终发进模型的样子
+
+把上面的组装展开，子 agent 启动时的初始消息结构很简单：
+
+```text
+state["messages"] = [
+    SystemMessage(  # 只有一条
+        config.system_prompt
+        + "\n\n" + 各 skill 正文
+        + "\n\n" + deferred 工具点名说明
+    ),
+    HumanMessage(task),   # 任务本身
+]
+```
+
+这里还要分清两类"工具信息"：
+
+```text
+工具的 schema / 定义    绑定到模型上（create_agent 的 tools 参数），不在 messages 里
+deferred 工具的点名     一段纯提示文字，拼进那条 SystemMessage（只报名字，不含调用细节）
+```
+
+`create_agent(system_prompt=None)` 是有意为之：系统提示被放进初始 messages 中的 `SystemMessage`，避免 `create_agent` 再额外注入一条系统消息，触发某些 LLM API 对多条 SystemMessage 的限制。
+
+## config 从哪来：内置写死 vs 配置文件
+
+`task_tool` 使用的 `config`（一个 `SubagentConfig`），由 `get_subagent_config(subagent_type)`（<SourceRef file="backend/packages/harness/deerflow/subagents/registry.py" sha="7e7f0410" symbol="get_subagent_config" />）解析出来，有两个来源：
+
+```text
+内置（general-purpose / bash）
+  整个来自 BUILTIN_SUBAGENTS（写死在 subagents/builtins/ 的 Python 里）
+  system_prompt 是源码里的字符串字面量
+
+自定义
+  来自 config.yaml 的 subagents.custom_agents
+  system_prompt 从配置文件读
+
+再叠加：config.yaml subagents.agents 段的 per-agent 覆盖
+  只动 timeout_seconds / max_turns / model / skills
+  碰不到 system_prompt
+```
+
+一个明确结论：内置 subagent 的 system_prompt 写在 Python 源码里，不从 config.yaml 读取，也不能被 per-agent 覆盖。想改内置提示词，要么改源码，要么在 `custom_agents` 里定义一个新的 subagent 类型。`general-purpose`、`bash` 这两个内置类型的行为定义之所以稳定，原因就在这里。
+
+`general-purpose` 内置默认 `max_turns=150`，`bash` 内置 agent 也有自己的上限。只有配置了全局 `subagents.max_turns`，才会统一覆盖这些内置值；`SubagentConfig.timeout_seconds=900` 更像兜底默认，内置 agent 的有效超时通常来自全局 `subagents.timeout_seconds`（默认 1800 秒）。
+
+## 执行模型：后台任务、隔离 loop、协作取消
+
+"后台独立运行"是这套系统里最复杂的部分。理解设计时不需要一开始就进入线程细节，但需要知道状态归谁管理、事件如何发出、取消为什么会有延迟。
+
+```text
+task_tool 协程        留在主 event loop，每 5s await sleep 轮询一次
+execute_async         向 _scheduler_pool（max_workers=3）提交后台任务，立即返回 task_id
+子 agent 协程          经 run_coroutine_threadsafe 提交到 _isolated_subagent_loop
+                      （一条全进程常驻、跨任务复用的 event loop，运行在自己的 daemon 线程里）
+```
+
+这三个执行身份里，只有调度线程和常驻 loop 线程是真线程；`task_tool` 自己是主 loop 上的协程。它们之间共享的状态表是全局 `_background_tasks[task_id] → SubagentResult`：后台执行负责写状态和结果，`task_tool` 轮询读取它，再决定向前端流式报告什么、最终返回什么字符串。
+
+为什么不为每个 subagent 新建一条 event loop？因为关闭短生命周期 loop 时，绑定在它上面的共享 async 客户端（例如 httpx client）可能被一起销毁。复用一条常驻 loop，可以降低这类运行时资源被错误关闭的风险。
+
+取消和超时是协作式的，因为 Python 无法安全地强制终止一个正在执行的线程：
+
+```text
+取消：request_cancel_background_task 只设置标记（threading.Event.set()）
+      _aexecute 在 agent.astream 的每个迭代边界检查 is_set()，发现取消后 return CANCELLED
+      代价：取消有延迟——长时间的单个 tool call 要等到下一个 chunk 才能停下来
+超时：调度线程的 future.result(timeout=...) 触发后，设置取消标记并标记 TIMED_OUT
+竞态：try_set_terminal 用锁保证终态只写一次，第一个写入终态的结果生效
+```
+
+## 结果如何回到 lead
+
+最后一块，要把"结果回流"和 subagent 的内部 state 分开。它们不是同一条路径。
+
+```text
+subagent 执行完成
+  提取最后一条 AIMessage 的文本，存成 result.result（字符串）
+task_tool
+  返回一个普通字符串（"Task Succeeded. Result: ..."）；注意：返回的是 str，不是 ToolMessage
+ToolNode
+  自动把这个字符串包装成 ToolMessage（配上原来的 tool_call_id），写回 lead 的对话
+```
+
+所以，subagent 内部的 `ThreadState` 和完整 message 历史并不会直接回到 lead。由于 `checkpointer=False`，这些中间过程不会被持久化；返回给 lead 的只有 `result.result` 这一段文本。lead 收到的 ToolMessage，是 ToolNode 根据 `task_tool` 返回的字符串即时包装出来的，和 subagent 内部 state schema 没有直接关系。
+
+这正是 task 工具文档里 "preserve context by keeping exploration separate" 的落地方式：subagent 内部可以产生很多消息、调用很多工具，但 lead 只接收最终整理过的文本结果。探索过程留在 subagent 的一次性状态里，主 agent 的上下文不会被这些过程细节填满。
+
+<Philosophy title="工程设计哲学">
+
+委派系统最关键的设计点，是它没有发明一套全新的 agent 机制。subagent 仍然由同一个 `create_agent` 工厂创建，只是运行范围更窄、生命周期更短。继承（sandbox / thread_data / thread_id）让它复用主 agent 的执行上下文；切断（无 task / checkpointer=False / 独立 state）让它保持有界。委派机制本质上就是这些选择的组合：复用同一套 agent 架构，限制能力，交给后台执行，最后只返回文本结果。
+
+代价是复用带来了一些耦合：能力开关和工具可见性绑定在同一个标志上，后台执行依赖线程、常驻 loop 和轮询，任务状态主要存在进程内。这是当前 runtime 约束下的实现折中；后续如果要增强可观测性、跨进程任务管理和取消能力，需要在这里继续拆分职责。
+
+</Philosophy>
+
+<Tradeoff leftTitle="复用 create_agent 工厂的好处" rightTitle="代价">
+  <Fragment slot="left">
+
+  - subagent 和 lead 共用一套 graph / agent loop / 工具机制，不引入新概念
+  - 继承执行上下文，subagent 不是冷启动，可以继续使用主 agent 的文件和环境
+  - 三层过滤加 skill 取交集，权限只收不放，安全边界更容易推理
+  - 结果只回传一段文本，主 agent 的上下文不被子任务的过程污染
+
+  </Fragment>
+  <Fragment slot="right">
+
+  - 能力（是否允许委派）和工具可见性（task 是否出现）绑定在 `subagent_enabled` 一个开关上
+  - 后台执行依赖线程、常驻 loop 和轮询，取消有延迟、跨进程不可见
+  - 任务怎么切分主要依赖 prompt 和模型，没有独立的拆分策略层
+  - subagent 之间没有结构化的共享发现，只能各自把结论回传给 lead
+
+  </Fragment>
+</Tradeoff>
+
+## 易误解的要点
+
+- **`task_tool` 是工具，不是 agent。** 创建 subagent 发生在 tools node 执行 task_tool 这个函数时（wrap_tool_call 最里层），不在任何 model hook 里。`create_agent` 在这条链里被调用两次：创建 lead 一次，创建 subagent 一次。
+- **`SubagentLimitMiddleware` 只裁剪，不创建。** 它在 `after_model` 决定"允许几个 task 进入工具节点"，创建发生在工具节点。
+- **复用 ThreadState 是为 subagent 自己调用工具，不是为了回传结果。** 工具要读 `state["sandbox"]` / `state["thread_data"]`，所以 schema 必须有这些字段。
+- **结果回流和 subagent 的 state 无关。** subagent 提取最终文本 → task_tool 返回 `str` → ToolNode 即时包装 ToolMessage。subagent 的完整消息历史不会直接进入 lead。
+- **`config.skills = []` 不等于 `None`。** 空列表是"明确不要 skill"，`None` 才是"加载所有已启用 skill"。
+- **内置 subagent 的 system_prompt 写死、不可配置覆盖。** config.yaml 的 per-agent 覆盖只动 timeout / max_turns / model / skills；`general-purpose` 的内置默认 `max_turns` 是 150。
+- **后台线程 / 隔离 loop / cancel_event 是后台执行的实现细节。** 属于异步运行时层面，理解委派设计时不需要一开始就深入到这一层。
+
+---
+
+到这里，从"请求进入"到"主 agent 委派子任务"的链路就接上了：sandbox 准备执行环境，subagent 用同一个工厂在这个环境里运行一个更窄、更短命的 agent，完成后把整理过的文本结果交回 lead。下一站看 skill 系统：它会给模型补充可复用能力，也会通过 `allowed_tools` 把最小权限落到运行时的工具策略里。

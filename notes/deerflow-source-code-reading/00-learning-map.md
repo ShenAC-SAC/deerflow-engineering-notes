@@ -55,10 +55,10 @@ Code reading focus
 2. Lead agent factory
 3. Tools assembly
 4. Middleware pipeline
-5. Sandbox system
-6. Subagent system
-7. Skills system
-8. Persistence, store, checkpointer, and run events
+5. Sandbox system (`05-sandbox-system.md`)
+6. Subagent system (`06-subagent-system.md`)
+7. Skills system (`07-skills-system.md`)
+8. Persistence, store, checkpointer, and run events (`08-persistence-store-checkpointer.md`)
 
 ## Current Mental Model
 

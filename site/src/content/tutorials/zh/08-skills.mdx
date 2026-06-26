@@ -1,0 +1,386 @@
+---
+lang: zh
+slug: 08-skills
+station: 8
+title: 技能系统：把经验沉淀成系统能力
+sha: 7e7f0410
+sourceRefs:
+  - backend/packages/harness/deerflow/config/skills_config.py
+  - backend/packages/harness/deerflow/skills/types.py
+  - backend/packages/harness/deerflow/skills/storage/skill_storage.py
+  - backend/packages/harness/deerflow/skills/storage/local_skill_storage.py
+  - backend/packages/harness/deerflow/skills/parser.py
+  - backend/packages/harness/deerflow/skills/validation.py
+  - backend/packages/harness/deerflow/skills/installer.py
+  - backend/packages/harness/deerflow/skills/security_scanner.py
+  - backend/packages/harness/deerflow/skills/tool_policy.py
+  - backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py
+  - backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/packages/harness/deerflow/tools/skill_manage_tool.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+Skill 容易被误解成“更长的 prompt”，或者某一类预设工具。这个理解太窄了。在 agent 系统里，skill 更像一种系统补强机制：把已经验证过的经验、流程、资料、脚本和权限边界沉淀下来，让 agent 以后可以按需复用。
+
+上一站的 subagent 解决的是“把任务委派给谁”。这一站看的是另一类复用：当某种工作方式已经沉淀成固定流程，DeerFlow 如何把它放进系统里，让 agent 在需要时加载，并且不因为加载了更多能力就无限扩大权限。
+
+本章的核心判断是：
+
+> Skill 不是 prompt 片段，也不是工具分类；它是 agent 系统把经验转成可安装、可审查、可激活、受权限约束能力的机制。
+
+<FlowDiagram
+  caption="skill 的两条主线：安装时保证文件可信，运行时按需进入上下文并收敛工具。"
+  chart={`flowchart TD
+  ZIP[".skill / skill_manage"] --> VALIDATE["解析和校验 SKILL.md"]
+  VALIDATE --> SCAN["security scanner"]
+  SCAN --> STORE["写入 skills/public 或 skills/custom"]
+  STORE --> LOAD["load_skills + extensions enabled"]
+  LOAD --> PROMPT["lead prompt 列出可用 skill"]
+  PROMPT --> ACT["普通 read_file 加载或 slash 显式激活"]
+  LOAD --> POLICY["allowed-tools 过滤工具列表"]
+  ACT --> MODEL["模型按 skill 执行任务"]`}/>
+
+## 先看目录：public 和 custom 不是同一类
+
+默认本地实现是 `LocalSkillStorage`（<SourceRef file="backend/packages/harness/deerflow/skills/storage/local_skill_storage.py" sha="7e7f0410" symbol="LocalSkillStorage" />）。它使用一个 skills root，下面分两类：
+
+```text
+skills/
+  public/
+    <name>/
+      SKILL.md
+  custom/
+    <name>/
+      SKILL.md
+    .history/
+      <name>.jsonl
+```
+
+这两个目录首先表达权限边界：
+
+```text
+public
+  内置 skill，视为只读。agent 不能直接修改。
+
+custom
+  用户或 agent 创建的 skill，可以编辑、删除，并记录历史。
+```
+
+skills root 的路径由 `SkillsConfig.get_skills_path()` 决定（<SourceRef file="backend/packages/harness/deerflow/config/skills_config.py" sha="7e7f0410" symbol="SkillsConfig.get_skills_path" />）：
+
+```text
+1. config.skills.path
+2. DEER_FLOW_SKILLS_PATH
+3. 调用方项目根目录下的 skills/
+4. 兼容 monorepo 的 legacy skills/
+```
+
+还有一个很容易混淆的路径：`container_path`，默认是 `/mnt/skills`。host 上的 skills root 是 Gateway 读写文件的位置；`/mnt/skills` 是 sandbox 容器里看到的路径。prompt 里告诉模型的 location 是容器路径，例如：
+
+```text
+/mnt/skills/public/repo-auditor/SKILL.md
+/mnt/skills/custom/my-review-flow/SKILL.md
+```
+
+<MarginNote>这里和 sandbox 章节是连在一起的：skill 文件存在 host 上，但模型通过工具读取时，看到的是 sandbox 内的挂载路径。</MarginNote>
+
+## `SKILL.md` 先是一个元数据文件
+
+`SKILL.md` 必须有 YAML frontmatter。解析入口是 `parse_skill_file()`（<SourceRef file="backend/packages/harness/deerflow/skills/parser.py" sha="7e7f0410" symbol="parse_skill_file" />），校验逻辑在 `validation.py`（<SourceRef file="backend/packages/harness/deerflow/skills/validation.py" sha="7e7f0410" symbol="_validate_skill_frontmatter" />）。
+
+最小形态大致是：
+
+```yaml
+---
+name: repo-auditor
+description: Audit a repository for a focused engineering question.
+allowed-tools:
+  - read_file
+  - grep
+---
+
+Use this skill when...
+```
+
+字段语义要分清：
+
+```text
+name
+  必填。只能用小写字母、数字和连字符，不能以连字符开头或结尾。
+
+description
+  安装校验要求字段存在；运行时加载要求它是非空字符串。
+  它会进入可用 skill 清单，帮助模型判断何时使用。
+
+allowed-tools
+  可选。声明这个 skill 需要哪些工具。
+```
+
+`allowed-tools` 有三个状态：
+
+```text
+缺省
+  这个 skill 没有声明工具权限。
+
+空列表 []
+  明确声明不需要任何工具。
+
+字符串列表
+  只声明这些工具名。
+```
+
+这个字段后面会直接影响工具列表，不是写给模型看的建议。
+
+## 加载 skill：发现文件，再合并 enabled 状态
+
+`SkillStorage.load_skills()`（<SourceRef file="backend/packages/harness/deerflow/skills/storage/skill_storage.py" sha="7e7f0410" symbol="SkillStorage.load_skills" />）做了几件事：
+
+```text
+遍历 public / custom
+  -> 找每个 SKILL.md
+  -> 解析成 Skill 对象
+  -> 按 skill.name 去重
+  -> 读取 ExtensionsConfig 合并 enabled 状态
+  -> enabled_only=True 时只保留启用项
+  -> 按 name 排序
+```
+
+这里有两个细节值得记住。
+
+第一，`enabled` 来自 extensions 配置，不直接写在 `SKILL.md` 里。这样 skill 文件描述“它是什么”，extensions 描述“当前是否启用”。
+
+第二，同名 skill 会按 `skill.name` 去重。当前遍历顺序是 `public` 再 `custom`，所以同名 custom skill 会覆盖 public skill 的描述对象。这是有意留下的定制入口：覆盖内置 skill 时，在 custom 下创建同名版本，避免直接修改 public。
+
+## 安装 `.skill`：不是直接解压到目标目录
+
+`.skill` 本质是 zip 包，但 DeerFlow 不会把它直接解压到 `skills/custom/<name>`。安装入口是 `LocalSkillStorage.ainstall_skill_from_archive()`，共享逻辑在 `installer.py`（<SourceRef file="backend/packages/harness/deerflow/skills/installer.py" sha="7e7f0410" symbol="safe_extract_skill_archive" />）。
+
+流程可以分成三段：
+
+```text
+准备阶段
+  创建临时目录
+  安全解压 zip
+  找到 skill 根目录
+  校验 SKILL.md frontmatter
+
+审查阶段
+  扫描 SKILL.md
+  扫描 references/templates 中的文本资源
+  扫描 scripts 下的可执行内容
+
+提交阶段
+  复制到 staging 目录
+  预留最终 target 目录
+  移动文件到 target
+  设置为 sandbox 可读
+  清理临时目录
+```
+
+安全解压主要防这些问题：
+
+```text
+zip 里写绝对路径
+zip 里包含 ..
+Windows 绝对路径
+解压后逃出临时目录
+symlink 指到外部
+压缩包解开后体积异常大
+```
+
+所谓“原子安装”，在这里指文件系统提交边界，不是数据库事务：扫描和校验都在临时目录完成，最终目录只有在通过审查后才被预留并写入；如果提交失败，已经预留的目标目录会被清理。它不能保证所有文件系统异常都像事务一样回滚，但能避免“半个未经审查的 skill 已经出现在正式目录里”。
+
+<Tradeoff leftTitle="这样做" rightTitle="代价">
+  <ul slot="left">
+    <li>安装前不会污染正式目录。</li>
+    <li>目标目录已存在时不会覆盖旧 skill。</li>
+    <li>scanner 可以在文件暴露给运行时前介入。</li>
+  </ul>
+  <ul slot="right">
+    <li>它仍然依赖本地文件系统语义。</li>
+    <li>并发写和跨进程编辑还需要更强的存储层锁。</li>
+  </ul>
+</Tradeoff>
+
+## security scanner：先拦截，不是强隔离
+
+`scan_skill_content()`（<SourceRef file="backend/packages/harness/deerflow/skills/security_scanner.py" sha="7e7f0410" symbol="scan_skill_content" />）会调用一个模型，把内容分成三类：
+
+```text
+allow
+warn
+block
+```
+
+安装 `.skill` 时会扫描：
+
+```text
+SKILL.md
+scripts/**              按 executable 内容处理
+references/**/*.{md,txt,yaml,json,...}
+templates/**/*.{md,txt,yaml,json,...}
+```
+
+普通说明文件允许 `allow` 或 `warn` 继续；`block` 拒绝。脚本更严格：必须是 `allow`，如果 scanner 给出 `warn` 也会拒绝。
+
+如果 scanner 调用失败，或者模型返回的 JSON 解析不了，当前实现会保守拒绝。这个策略是对的，因为 skill 会改变后续 agent 的行为。scanner 不确定时放行，等于把风险推迟到运行时。
+
+但也要说清它的边界：scanner 是内容审查，不是强隔离。它可以拦明显恶意的 prompt injection、越权指令、危险脚本，但不能替代 sandbox、工具权限和用户授权。
+
+<Design30>
+3.0 值得补一层更完整的确定性静态扫描。当前安装器已经能拦 zip 路径逃逸、symlink、解压总体积异常和嵌套 `SKILL.md`；剩下更适合继续用稳定规则补强的，是脚本读取敏感环境变量、网络下载后直接执行、访问敏感系统路径、可疑 shell 片段这类结构化风险。更理想的结构是：静态扫描给出确定规则结果，模型 scanner 负责语义审查，最后统一形成可审计的 allow/warn/block 结论。
+</Design30>
+
+## 运行时不会一次性注入所有 skill 正文
+
+lead agent 的 prompt 里有 skill section，但它默认只列出可用清单。生成这段内容的是 `get_skills_prompt_section()`（<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/prompt.py" sha="7e7f0410" symbol="get_skills_prompt_section" />）。
+
+清单形态大致是：
+
+```text
+<available_skills>
+  <skill>
+    <name>repo-auditor</name>
+    <description>...</description>
+    <location>/mnt/skills/public/repo-auditor/SKILL.md</location>
+  </skill>
+</available_skills>
+```
+
+这一步只告诉模型“有哪些 skill、它们适合什么、主文件在哪里”。它没有把所有 `SKILL.md` 正文都拼进去。原因很实际：skill 可能很多，support files 也可能很大，每次 run 都塞进上下文会浪费 token，也会增加无关指令互相干扰的概率。
+
+普通加载路径是 progressive loading：
+
+```text
+模型判断某个 skill 适合当前任务
+  -> 用 read_file 读取该 skill 的 SKILL.md
+  -> 按 SKILL.md 中的引用，再按需读取 support files
+  -> 按 skill 的流程执行
+```
+
+<Design30>
+3.0 值得给 skill 发现列表单独设计上下文预算。这里预算的对象是 lead prompt 里的 `name / description / location` 目录，不是完整 `SKILL.md`。启用的 skill 越多，这个目录越占 token，也越容易把无关能力塞进模型注意力里。可以在 `config.yaml` 里提供类似 `skills.prompt_budget_tokens` 的配置；超出预算时，优先保留显式激活、agent 白名单、近期使用或高命中 skill 的 description，低优先级 skill 降级成 `name + location` 或极短摘要。同时要给用户明确提示：部分 skill description 因预算被省略，可以通过提高预算让更多 skill 完整出现在发现列表里。
+</Design30>
+
+## slash activation：用户显式指定时才直接注入全文
+
+另一条路径是 `/skill-name ...`。这是 `SkillActivationMiddleware` 解析的显式激活语法（<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="7e7f0410" symbol="SkillActivationMiddleware" />），不是普通文本约定。
+
+用户输入：
+
+```text
+/repo-auditor 检查这个 PR 是否有持久化风险
+```
+
+middleware 会做这些事：
+
+```text
+解析 /repo-auditor
+  -> 确认 skill 已安装
+  -> 确认 skill 已启用
+  -> 确认它属于当前 agent 可用范围
+  -> 安全读取 SKILL.md
+  -> 计算内容 hash
+  -> 插入一条 hide_from_ui=True 的 HumanMessage
+```
+
+这条 hidden message 包含完整 `SKILL.md` 内容和用户剩余任务文本。它对模型可见，但不应该出现在前端对话里。
+
+为什么 slash activation 要直接注入全文？因为用户已经明确说“这次就用这个 skill”。再让模型自己去读主文件，既浪费一步，也可能因为工具选择出错导致没有使用。
+
+## `allowed-tools`：权限收敛发生在工具列表上
+
+权限收敛主要发生在 `tool_policy.py`（<SourceRef file="backend/packages/harness/deerflow/skills/tool_policy.py" sha="7e7f0410" symbol="filter_tools_by_skill_allowed_tools" />）。lead agent 装配工具时，会先加载当前可用且启用的 skills，再用这些 skill 的 `allowed-tools` 过滤工具列表（<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" symbol="_make_lead_agent" />）。
+
+当前规则是：
+
+```text
+没有加载任何 skill
+  -> 不过滤，保持兼容。
+
+加载的 skill 都没写 allowed-tools
+  -> 不过滤，保持兼容。
+
+只要有任意 skill 写了 allowed-tools
+  -> 取所有显式声明的工具并集。
+     没写 allowed-tools 的 skill 不贡献工具。
+
+allowed-tools: []
+  -> 这个 skill 明确声明不需要工具。
+```
+
+这说明权限收敛发生在工具列表上：不允许的工具会直接从模型可调用列表里移除，而不是只靠 prompt 提醒模型不要用。
+
+但是并集语义也有代价：如果一个 agent 同时启用了多个 skill，只要其中某些 skill 声明了工具，最终工具集合就会变成这些声明的并集。这适合“agent 能使用这些 skill”的粗粒度场景，但不等于“当前这一次显式激活的 skill 的最小权限”。
+
+<Design30>
+3.0 可以把 skill 权限从“启用 skill 的全局并集”推进到“本轮 active skill 的权限”。这需要进一步区分 installed、enabled、loaded、activated：磁盘上有哪些、agent 允许哪些、本轮实际读了哪些、用户显式指定了哪些。工具权限最好能回答一个具体问题：这个工具为什么在这一轮可用？
+</Design30>
+
+## agent 也能写 custom skill，但边界更窄
+
+`skill_manage_tool`（<SourceRef file="backend/packages/harness/deerflow/tools/skill_manage_tool.py" sha="7e7f0410" symbol="skill_manage_tool" />）允许 agent 管理 custom skill：
+
+```text
+create
+edit
+patch
+delete
+write_file
+remove_file
+```
+
+它有几条重要边界：
+
+```text
+只能操作 custom skill
+  public skill 不能直接修改。
+
+同一个 skill 名称有进程内锁
+  同一 Python 进程内，两个并发写不会同时进入关键区。
+
+写 SKILL.md 前重新校验 frontmatter
+  防止 agent 写出格式不合法的 skill。
+
+写 support file 前校验路径
+  只能写 references/templates/scripts/assets 下的相对路径。
+
+写入前跑 scanner
+  scripts 按 executable 更严格处理。
+
+写入后记录 history
+  记录 action、thread_id、前后内容和 scanner 结果。
+```
+
+这套设计把 agent 自我改进限制在 `skills/custom/` 下，避免它直接改内置 public skill。它也记录历史，方便回看是谁在什么 thread 里改了什么。
+
+但这里还有一个真实债务：这个锁是进程内 `asyncio.Lock`。如果多个 Gateway 进程共享同一个 skills root，它们的内存锁互相不可见。archive install 的最终目录预留更强一些，但 agent-managed edit/patch/write_file 还缺少跨进程写保护。
+
+<Design30>
+skill 写入的并发控制应该下沉到 storage 层。3.0 可以引入 `SkillStorage.begin_write(name)` 这类抽象，由本地文件锁、数据库行锁或对象存储 lease 来实现；提交时带版本号或 compare-and-swap，避免两个进程同时编辑同一个 custom skill 时互相覆盖。
+</Design30>
+
+## 小结：skill 系统解决了什么
+
+把 skill 系统看成“prompt 文件夹”会漏掉最重要的部分。它解决的是四件事：
+
+```text
+可发现
+  lead prompt 只列 name / description / location，让模型知道有哪些能力。
+
+可安装
+  .skill 先解压、校验、扫描，再进入 custom 目录。
+
+可激活
+  普通场景按需 read_file；显式 /skill-name 由 middleware 注入全文。
+
+可收敛权限
+  allowed-tools 直接过滤工具列表，而不是只写成提示词。
+```
+
+这也是为什么 skill 是架构层概念，而不是 prompt 工程小技巧。它把复用流程、文件存储、安全审查和工具权限放进同一条运行时链路里。

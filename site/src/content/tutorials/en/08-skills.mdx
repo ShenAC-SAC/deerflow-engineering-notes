@@ -1,0 +1,393 @@
+---
+lang: en
+slug: 08-skills
+station: 8
+title: "Skill system: turning experience into system capability"
+sha: 7e7f0410
+sourceRefs:
+  - backend/packages/harness/deerflow/config/skills_config.py
+  - backend/packages/harness/deerflow/skills/types.py
+  - backend/packages/harness/deerflow/skills/storage/skill_storage.py
+  - backend/packages/harness/deerflow/skills/storage/local_skill_storage.py
+  - backend/packages/harness/deerflow/skills/parser.py
+  - backend/packages/harness/deerflow/skills/validation.py
+  - backend/packages/harness/deerflow/skills/installer.py
+  - backend/packages/harness/deerflow/skills/security_scanner.py
+  - backend/packages/harness/deerflow/skills/tool_policy.py
+  - backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py
+  - backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/packages/harness/deerflow/tools/skill_manage_tool.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+A skill is easy to mistake for "a longer prompt", or for one more category of tool. That is too narrow. In an agent system, a skill is a way to strengthen the system itself: it captures proven experience, workflows, references, scripts, and permission boundaries so the agent can reuse them when the situation calls for it.
+
+The previous stop explained subagents: who should receive delegated work. This stop explains another kind of reuse. When a way of working has become repeatable, how does DeerFlow put it into the system so an agent can load it when needed, without turning every extra capability into extra authority?
+
+The key idea:
+
+> A skill is not a prompt snippet or a tool category. It is the mechanism that turns experience into installable, reviewable, activatable, permission-bounded agent capability.
+
+<FlowDiagram
+  caption="The two skill paths: installation reviews files before exposure; runtime loading brings skill context in only when needed and narrows tools."
+  chart={`flowchart TD
+  ZIP[".skill / skill_manage"] --> VALIDATE["parse and validate SKILL.md"]
+  VALIDATE --> SCAN["security scanner"]
+  SCAN --> STORE["write to skills/public or skills/custom"]
+  STORE --> LOAD["load_skills + extensions enabled"]
+  LOAD --> PROMPT["lead prompt lists available skills"]
+  PROMPT --> ACT["ordinary read_file loading or slash activation"]
+  LOAD --> POLICY["allowed-tools filters tool list"]
+  ACT --> MODEL["model follows the skill"]`}/>
+
+## Public And Custom
+
+The default local implementation is `LocalSkillStorage` (<SourceRef file="backend/packages/harness/deerflow/skills/storage/local_skill_storage.py" sha="7e7f0410" symbol="LocalSkillStorage" />). It uses one skills root with two categories:
+
+```text
+skills/
+  public/
+    <name>/
+      SKILL.md
+  custom/
+    <name>/
+      SKILL.md
+    .history/
+      <name>.jsonl
+```
+
+The split is not cosmetic. It carries a permission meaning:
+
+```text
+public
+  built-in skills, treated as read-only.
+  agents cannot modify them directly.
+
+custom
+  user-created or agent-created skills.
+  they can be edited, deleted, and recorded in history.
+```
+
+The skills root comes from `SkillsConfig.get_skills_path()` (<SourceRef file="backend/packages/harness/deerflow/config/skills_config.py" sha="7e7f0410" symbol="SkillsConfig.get_skills_path" />):
+
+```text
+1. config.skills.path
+2. DEER_FLOW_SKILLS_PATH
+3. skills/ under the caller project root
+4. a legacy monorepo skills/ path
+```
+
+There is another path that is easy to mix up: `container_path`, which defaults to `/mnt/skills`. The host skills root is where the Gateway reads and writes files. `/mnt/skills` is where the sandbox container sees those files. The prompt gives the model the container path, for example:
+
+```text
+/mnt/skills/public/repo-auditor/SKILL.md
+/mnt/skills/custom/my-review-flow/SKILL.md
+```
+
+<MarginNote>This ties directly back to the sandbox chapter: skill files live on the host, but when the model reads them through tools, it sees the mounted sandbox path.</MarginNote>
+
+## `SKILL.md` Is Metadata First
+
+`SKILL.md` must contain YAML frontmatter. Parsing starts at `parse_skill_file()` (<SourceRef file="backend/packages/harness/deerflow/skills/parser.py" sha="7e7f0410" symbol="parse_skill_file" />), and validation lives in `validation.py` (<SourceRef file="backend/packages/harness/deerflow/skills/validation.py" sha="7e7f0410" symbol="_validate_skill_frontmatter" />).
+
+A minimal shape looks like this:
+
+```yaml
+---
+name: repo-auditor
+description: Audit a repository for a focused engineering question.
+allowed-tools:
+  - read_file
+  - grep
+---
+
+Use this skill when...
+```
+
+Keep the field meanings separate:
+
+```text
+name
+  required.
+  only lowercase letters, numbers, and hyphens.
+  it cannot start or end with a hyphen.
+
+description
+  installation validation requires the field to exist.
+  runtime loading requires it to be a non-empty string.
+  it enters the available-skill list and helps the model decide when to use it.
+
+allowed-tools
+  optional.
+  declares which tools this skill needs.
+```
+
+`allowed-tools` has three distinct states:
+
+```text
+missing
+  this skill does not declare tool permissions.
+
+empty list []
+  this skill explicitly says it needs no tools.
+
+string list
+  only these tool names are declared.
+```
+
+This field later affects the callable tool list. It is a runtime permission input, not prompt advice.
+
+## Loading Skills
+
+`SkillStorage.load_skills()` (<SourceRef file="backend/packages/harness/deerflow/skills/storage/skill_storage.py" sha="7e7f0410" symbol="SkillStorage.load_skills" />) does the runtime discovery work:
+
+```text
+walk public / custom
+  -> find each SKILL.md
+  -> parse it into a Skill object
+  -> deduplicate by skill.name
+  -> read ExtensionsConfig and merge enabled state
+  -> when enabled_only=True, keep only enabled skills
+  -> sort by name
+```
+
+Two details are worth remembering.
+
+First, `enabled` is not written directly in `SKILL.md`. It comes from extensions config. That keeps the file's meaning clean: the skill file describes what the skill is; extensions config says whether this installation currently enables it.
+
+Second, skills are deduplicated by `skill.name`. The traversal order is `public` then `custom`, so a custom skill with the same name can override the loaded skill object for a public skill. That is the intended customization path: do not edit `public`; create a same-named custom version if you need to override behavior.
+
+## Installing `.skill`
+
+A `.skill` file is a zip archive, but DeerFlow does not unzip it straight into `skills/custom/<name>`. Installation starts at `LocalSkillStorage.ainstall_skill_from_archive()`, with shared logic in `installer.py` (<SourceRef file="backend/packages/harness/deerflow/skills/installer.py" sha="7e7f0410" symbol="safe_extract_skill_archive" />).
+
+The flow has three phases:
+
+```text
+prepare
+  create a temporary directory
+  safely extract the zip
+  locate the skill root
+  validate SKILL.md frontmatter
+
+review
+  scan SKILL.md
+  scan text resources under references/templates
+  scan executable content under scripts
+
+commit
+  copy into a staging directory
+  reserve the final target directory
+  move files into the target
+  make them sandbox-readable
+  clean the temporary directory
+```
+
+Safe extraction mainly defends against:
+
+```text
+absolute paths in the zip
+.. path segments
+Windows absolute paths
+files escaping the temp directory after extraction
+symlinks pointing outside
+archives that expand to an unexpectedly large size
+```
+
+"Atomic installation" here means a filesystem commit boundary. Validation and scanning happen in a temporary directory. The final skill directory is only reserved and written after review passes. If commit fails, the reserved target directory is cleaned up. Filesystem errors still cannot be rolled back with database-transaction semantics; the important guarantee is that a half-reviewed skill does not become visible in the official directory.
+
+<Tradeoff leftTitle="Benefit" rightTitle="Cost">
+  <ul slot="left">
+    <li>Installation does not pollute the official directory before review.</li>
+    <li>An existing target directory is not overwritten.</li>
+    <li>The scanner can run before files become visible to runtime loading.</li>
+  </ul>
+  <ul slot="right">
+    <li>The guarantee still depends on local filesystem semantics.</li>
+    <li>Concurrent writes and multi-process edits need stronger storage-level locking.</li>
+  </ul>
+</Tradeoff>
+
+## Security Scanner
+
+`scan_skill_content()` (<SourceRef file="backend/packages/harness/deerflow/skills/security_scanner.py" sha="7e7f0410" symbol="scan_skill_content" />) calls a model and classifies content into three outcomes:
+
+```text
+allow
+warn
+block
+```
+
+Installing a `.skill` scans:
+
+```text
+SKILL.md
+scripts/**              treated as executable content
+references/**/*.{md,txt,yaml,json,...}
+templates/**/*.{md,txt,yaml,json,...}
+```
+
+Ordinary text files may proceed with `allow` or `warn`; `block` rejects the install. Scripts are stricter: they must be `allow`. If the scanner returns `warn` for a script, DeerFlow rejects it.
+
+If the scanner call fails, or the model returns JSON that cannot be parsed, the current implementation rejects conservatively. That is the right default because a skill changes future agent behavior. Letting an uncertain scan pass would only delay the risk until runtime.
+
+The boundary is important: the scanner reviews content. It can catch obvious malicious prompt injection, privilege-escalation instructions, and dangerous scripts, but it does not replace sandboxing, tool permissions, or user authorization.
+
+<Design30>
+3.0 should add a more complete deterministic static scanning layer. The current installer already blocks zip path escape, symlinks, abnormal total extracted size, and nested `SKILL.md` files. The remaining risks that fit stable rules are things like scripts reading sensitive environment variables, download-and-execute shell fragments, access to sensitive system paths, and suspicious shell patterns. The cleaner shape is: static rules produce deterministic findings, model scanning handles semantic review, and the installer records one auditable allow/warn/block result.
+</Design30>
+
+## Runtime Loading Is Progressive
+
+The lead-agent prompt has a skill section, but by default it only lists available skills. `get_skills_prompt_section()` generates that section (<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/prompt.py" sha="7e7f0410" symbol="get_skills_prompt_section" />).
+
+The list looks roughly like this:
+
+```text
+<available_skills>
+  <skill>
+    <name>repo-auditor</name>
+    <description>...</description>
+    <location>/mnt/skills/public/repo-auditor/SKILL.md</location>
+  </skill>
+</available_skills>
+```
+
+This only tells the model which skills exist, what they are for, and where the main file is. It does not paste every `SKILL.md` body into the context. The reason is practical: there may be many skills, and support files may be large. Injecting all of them into every run wastes tokens and increases the chance that unrelated instructions interfere with each other.
+
+The ordinary loading path is progressive:
+
+```text
+the model decides a skill fits the task
+  -> read that skill's SKILL.md with read_file
+  -> follow references in SKILL.md and load support files as needed
+  -> execute the workflow described by the skill
+```
+
+<Design30>
+3.0 should give the skill discovery list its own context budget. The budget is not for full `SKILL.md` injection; it is for the `name / description / location` catalog that appears in the lead prompt. The more enabled skills there are, the more tokens this catalog consumes, and the more unrelated capability descriptions compete for attention. A config such as `skills.prompt_budget_tokens` could set the limit. When the catalog exceeds it, DeerFlow should keep descriptions for explicitly activated skills, agent-whitelisted skills, recently used skills, or frequently matched skills, while degrading lower-priority skills to `name + location` or a very short summary. The user should also get a clear warning that some skill descriptions were omitted by budget and that raising the budget will expose more complete discovery metadata.
+</Design30>
+
+## Slash Activation
+
+The other path is `/skill-name ...`. This explicit activation syntax is parsed by `SkillActivationMiddleware` (<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="7e7f0410" symbol="SkillActivationMiddleware" />).
+
+When a user writes:
+
+```text
+/repo-auditor check whether this PR has persistence risks
+```
+
+the middleware:
+
+```text
+parses /repo-auditor
+  -> confirms the skill is installed
+  -> confirms the skill is enabled
+  -> confirms it is available to the current agent
+  -> safely reads SKILL.md
+  -> computes a content hash
+  -> inserts a HumanMessage with hide_from_ui=True
+```
+
+That hidden message contains the full `SKILL.md` content and the remaining user task. The model can see it; the frontend conversation should not show it.
+
+Slash activation injects the full skill because the user already said "use this skill for this request". Asking the model to rediscover and read the entry file would waste a step, and it could fail if tool selection goes wrong.
+
+## `allowed-tools`
+
+The permission-sensitive code is in `tool_policy.py` (<SourceRef file="backend/packages/harness/deerflow/skills/tool_policy.py" sha="7e7f0410" symbol="filter_tools_by_skill_allowed_tools" />). When the lead agent assembles tools, it first loads currently available and enabled skills, then filters the tool list using those skills' `allowed-tools` declarations (<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" symbol="_make_lead_agent" />).
+
+The current rule is:
+
+```text
+no skills loaded
+  -> do not filter, for compatibility.
+
+all loaded skills omit allowed-tools
+  -> do not filter, for compatibility.
+
+at least one loaded skill declares allowed-tools
+  -> take the union of all explicitly declared tools.
+     skills without allowed-tools contribute no tools.
+
+allowed-tools: []
+  -> this skill explicitly declares that it needs no tools.
+```
+
+This means permission narrowing is not a prompt telling the model "please do not use this tool". The disallowed tools are removed from the callable tool list. The model cannot see or call them.
+
+The union rule has a cost. If one agent has multiple enabled skills and several of them declare tools, the final tool set becomes the union of those declarations. That is useful for a coarse "this agent may use these skills" model, but it is not the same as the minimum permissions for the single skill activated in this one request.
+
+<Design30>
+3.0 can move skill permissions from "global union across enabled skills" toward "permissions for the active skill in this run". That requires separating installed, enabled, loaded, and activated: what exists on disk, what this agent may use, what this run loaded, and what the user explicitly requested. Tool permissions should be able to answer a concrete question: why is this tool available in this run?
+</Design30>
+
+## Agent-Managed Custom Skills
+
+`skill_manage_tool` (<SourceRef file="backend/packages/harness/deerflow/tools/skill_manage_tool.py" sha="7e7f0410" symbol="skill_manage_tool" />) lets an agent manage custom skills:
+
+```text
+create
+edit
+patch
+delete
+write_file
+remove_file
+```
+
+It has several important boundaries:
+
+```text
+custom only
+  public skills cannot be modified directly.
+
+in-process lock by skill name
+  two concurrent writes in the same Python process do not enter the critical section together.
+
+validate frontmatter before writing SKILL.md
+  prevents the agent from saving an invalid skill file.
+
+validate support-file paths before writing
+  only relative paths under references/templates/scripts/assets are allowed.
+
+run the scanner before writing
+  scripts are treated more strictly as executable content.
+
+record history after writing
+  action, thread_id, before/after content, and scanner result are recorded.
+```
+
+This keeps agent self-improvement under `skills/custom/` and prevents direct edits to built-in public skills. It also records enough history to inspect which thread changed what.
+
+One debt remains: the lock is an in-process `asyncio.Lock`. If multiple Gateway processes share the same skills root, their memory locks cannot see each other. Archive installation has a stronger final-directory reservation step. Agent-managed edit, patch, and write_file still lack cross-process write protection.
+
+<Design30>
+Skill write concurrency should move down into the storage layer. A 3.0 design could introduce something like `SkillStorage.begin_write(name)`, implemented with local file locks, database row locks, or object-storage leases depending on the backend. Commits should carry a version or compare-and-swap guard so two processes editing the same custom skill cannot silently overwrite each other.
+</Design30>
+
+## Summary
+
+Treating skills as "a prompt folder" misses the important part. The skill system solves four runtime problems:
+
+```text
+discoverable
+  the lead prompt lists name / description / location so the model knows what exists.
+
+installable
+  .skill archives are extracted, validated, scanned, and only then moved into custom.
+
+activatable
+  ordinary runs load files progressively;
+  explicit /skill-name activation injects the full SKILL.md through middleware.
+
+permission-narrowing
+  allowed-tools filters the actual tool list instead of relying on prompt text.
+```
+
+That is why skills are an architectural feature. They put reusable workflows, file storage, safety review, and tool permission policy into one runtime path.

@@ -1,18 +1,18 @@
 # DeerFlow Engineering Notes · Site
 
-DeerFlow 2.0 Python 版工程源码手记。
+DeerFlow Python 版工程源码手记。
 
 站点用「请求的旅程」组织文章:从一句话进入 Gateway,到 run 创建、agent 图装配、工具能力计算,逐站拆开 DeerFlow 的运行时设计。目标是把工业级 Agent 系统讲清楚,同时保留一点轻松的工程博客语气。
 
 ## 心智模型
 
 ```
-旅程地图(数据) ──▶ src/data/journey.ts      8 站卡片元数据(双语 + 风险 + 抽象高度 + 锁定态)
-深读正文(内容) ──▶ src/content/tutorials/   只放 published 的站,走 MDX + 组件
+旅程地图(数据) ──▶ src/data/journey.ts      9 站卡片元数据(双语 + 风险 + 抽象高度 + 锁定态)
+深读正文(内容) ──▶ src/content/tutorials/   MDX + 组件; published 站必须中英齐全
 ```
 
-地图是数据、深读是内容,各自演化、互不绑架。索引读 `journey.ts` 渲染全部 8 站;
-只有 `status: 'published'` 的站才有 MDX 深读页和路由。
+地图是数据、深读是内容,各自演化、互不绑架。索引读 `journey.ts` 渲染全部 9 站;
+`status: 'published'` 的站会在卡片上放开入口,并且必须同时有 zh/en 深读。locked 站可以先保留单语草稿,但不会在旅程卡片上开放。
 
 ## 命令
 
@@ -46,7 +46,7 @@ scripts/check-source-refs.mjs     锚定校验脚本
 ## 加一站(把某站从 locked 变 published)
 
 1. 在 `src/data/journey.ts` 把该站 `status` 改成 `'published'`。
-2. 新建 `src/content/tutorials/zh/<slug>.mdx` 和 `en/<slug>.mdx`,frontmatter:
+2. 确认 `src/content/tutorials/zh/<slug>.mdx` 和 `en/<slug>.mdx` 都存在,frontmatter:
    ```yaml
    ---
    lang: zh            # 或 en

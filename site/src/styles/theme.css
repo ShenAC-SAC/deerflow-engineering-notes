@@ -31,7 +31,6 @@
   --blue-wash:  rgba(44,90,134,.08);
 
   --ok:         #3f7a52;   /* 鼠尾草绿:仅留作语义备用 */
-  --risk:       var(--ink);/* 风险计走单色仪表:靠「亮起的数量」说话,不抢朱砂 */
 
   --card:       var(--panel);
   --shadow-soft:0 18px 44px -26px rgba(70,48,20,.42);

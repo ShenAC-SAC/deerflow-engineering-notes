@@ -1,19 +1,15 @@
 ---
-import RiskMeter from './RiskMeter.astro';
-
 interface Props {
   station: number;
   title: string;
   mentalModel: string;
   teaser?: string;
-  risk: number;
-  altitude: string;
   status: 'published' | 'locked';
   href?: string;
   lang?: 'zh' | 'en';
 }
 const {
-  station, title, mentalModel, teaser, risk, altitude, status, href, lang = 'zh',
+  station, title, mentalModel, teaser, status, href, lang = 'zh',
 } = Astro.props;
 const locked = status === 'locked';
 const Tag = locked ? 'div' : 'a';
@@ -21,9 +17,6 @@ const num = String(station).padStart(2, '0');
 const t = lang === 'zh'
   ? { planned: '计划中', open: '阅读本篇' }
   : { planned: 'planned', open: 'read this stop' };
-const altitudeLabel = lang === 'zh'
-  ? altitude
-  : ({ '实现': 'implementation', '架构': 'architecture', '哲学': 'philosophy' } as Record<string, string>)[altitude] || altitude;
 ---
 <Tag class:list={['station-card', { locked }]} href={locked ? undefined : href}>
   <span class="st-badge">{num}</span>
@@ -36,8 +29,6 @@ const altitudeLabel = lang === 'zh'
         <span class="st-planned">□ {t.planned}</span>
       ) : (
         <Fragment>
-          <span class="st-alt">{altitudeLabel}</span>
-          <RiskMeter value={risk} lang={lang} />
           <span class="st-open">{t.open} →</span>
         </Fragment>
       )}
@@ -101,11 +92,6 @@ const altitudeLabel = lang === 'zh'
   .locked .st-teaser { color: var(--ink-faint); font-size: .86rem; margin-bottom: 0; }
 
   .st-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .st-alt {
-    font-family: var(--mono); font-size: .64rem; letter-spacing: .14em; text-transform: uppercase;
-    color: var(--blue); border: 1px solid rgba(44,90,134,.3);
-    padding: 2px 9px; border-radius: 20px;
-  }
   .st-planned { font-family: var(--mono); font-size: .72rem; letter-spacing: .05em; color: var(--ink-faint); }
   .st-open {
     margin-left: auto; font-family: var(--mono); font-size: .72rem; letter-spacing: .04em;

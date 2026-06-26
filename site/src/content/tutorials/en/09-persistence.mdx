@@ -1,0 +1,596 @@
+---
+lang: en
+slug: 09-persistence
+station: 9
+title: "Persistence: making agent runs resumable and traceable"
+sha: 7e7f0410
+sourceRefs:
+  - backend/app/gateway/deps.py
+  - backend/app/gateway/services.py
+  - backend/app/gateway/routers/threads.py
+  - backend/app/gateway/routers/thread_runs.py
+  - backend/packages/harness/deerflow/config/database_config.py
+  - backend/packages/harness/deerflow/config/checkpointer_config.py
+  - backend/packages/harness/deerflow/config/run_events_config.py
+  - backend/packages/harness/deerflow/runtime/checkpointer/async_provider.py
+  - backend/packages/harness/deerflow/runtime/store/async_provider.py
+  - backend/packages/harness/deerflow/runtime/runs/manager.py
+  - backend/packages/harness/deerflow/runtime/runs/worker.py
+  - backend/packages/harness/deerflow/runtime/journal.py
+  - backend/packages/harness/deerflow/runtime/events/store/base.py
+  - backend/packages/harness/deerflow/runtime/events/store/db.py
+  - backend/packages/harness/deerflow/persistence/engine.py
+  - backend/packages/harness/deerflow/persistence/bootstrap.py
+  - backend/packages/harness/deerflow/persistence/migrations/_helpers.py
+  - backend/packages/harness/deerflow/persistence/migrations/versions/0001_baseline.py
+  - backend/packages/harness/deerflow/persistence/migrations/versions/0002_runs_token_usage.py
+  - backend/packages/harness/deerflow/persistence/run/model.py
+  - backend/packages/harness/deerflow/persistence/run/sql.py
+  - backend/packages/harness/deerflow/persistence/thread_meta/sql.py
+  - backend/packages/harness/deerflow/runtime/serialization.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import Design30 from '../../../components/Design30.astro';
+
+The wrong first question for DeerFlow persistence is only "what gets saved?" In an agent system, persistence is closer to a fact boundary: after an agent spans turns, calls tools, writes files, emits events, and creates side effects, the system must know what can resume, what can be queried, and what can be audited.
+
+This stop is not about memorizing table names. It is about drawing one boundary:
+
+> Persistence is not "saving chat history". It is the recoverable, queryable, auditable fact layer for agent runs. The checkpointer owns resumable graph state; Store owns long-lived key-value state; RunStore, RunEventStore, and ThreadMetaStore own DeerFlow Gateway runtime records for queries, display, recovery, and audit.
+
+<FlowDiagram
+  caption="One run touches several storage surfaces. They are not at the same layer, and they should not replace each other."
+  chart={`flowchart TD
+  REQ["HTTP run request"] --> RM["RunManager / RunStore"]
+  REQ --> TM["ThreadMetaStore"]
+  RM --> WORKER["run_agent()"]
+  WORKER --> CP["LangGraph Checkpointer"]
+  WORKER --> STORE["LangGraph Store"]
+  WORKER --> JOURNAL["RunJournal"]
+  JOURNAL --> EV["RunEventStore"]
+  CP --> STATE["/state / history / wait"]
+  TM --> LIST["/threads/search"]
+  RM --> RUNS["/runs / token-usage"]
+  EV --> MSG["/messages / events"]`}/>
+
+## Startup Assembles Runtime Infrastructure
+
+Persistence components are not created per request. During Gateway startup, `langgraph_runtime()` (<SourceRef file="backend/app/gateway/deps.py" sha="7e7f0410" symbol="langgraph_runtime" />) uses a startup snapshot of `AppConfig` to create long-lived objects:
+
+```text
+make_stream_bridge(config)
+init_engine_from_config(config.database)
+make_checkpointer(config)
+make_store(config)
+RunRepository or MemoryRunStore
+ThreadMetaRepository or MemoryThreadMetaStore
+make_run_event_store(config.run_events)
+RunManager(store=run_store)
+```
+
+These objects live on `app.state`. When a request arrives, the router does not create a new database pool or a new checkpointer. It reads the already-created runtime objects from `app.state`.
+
+This explains an important behavior: DeerFlow supports some per-run configuration flexibility, but database, checkpointer, store, and run-event infrastructure are startup-bound. If you change `database` or `run_events` in `config.yaml`, you usually need to restart the Gateway before the backend uses the new setting.
+
+<MarginNote>Separate request-level config from startup-level config. Model parameters can vary per run. A database connection pool cannot quietly switch backend inside one request.</MarginNote>
+
+## Schema Bootstrap Happens At Startup
+
+Persistence also includes how application tables are created and upgraded. DeerFlow does not only call `Base.metadata.create_all()` unconditionally. `init_engine_from_config()` enters `bootstrap_schema()` (<SourceRef file="backend/packages/harness/deerflow/persistence/bootstrap.py" sha="7e7f0410" symbol="bootstrap_schema" />):
+
+```text
+empty database
+  create_all()
+  alembic stamp head
+
+legacy database: DeerFlow tables exist but alembic_version does not
+  ensure baseline tables exist
+  stamp 0001_baseline
+  upgrade head
+
+versioned database: alembic_version exists
+  alembic upgrade head
+```
+
+This hybrid bootstrap chooses a practical split: an empty database uses SQLAlchemy metadata to create tables, avoiding a hand-written baseline that can drift; after the baseline, changes go through Alembic migrations. `0001_baseline` (<SourceRef file="backend/packages/harness/deerflow/persistence/migrations/versions/0001_baseline.py" sha="7e7f0410" />) mainly acts as the root of the Alembic chain and the stamp target for legacy databases. In the usual new-database path, DeerFlow does `create_all + stamp head`; it does not execute every baseline DDL statement one by one.
+
+`0002_runs_token_usage` (<SourceRef file="backend/packages/harness/deerflow/persistence/migrations/versions/0002_runs_token_usage.py" sha="7e7f0410" />) shows how post-baseline changes work: it adds `token_usage_by_model` to the `runs` table. It uses `_helpers.safe_add_column()` (<SourceRef file="backend/packages/harness/deerflow/persistence/migrations/_helpers.py" sha="7e7f0410" symbol="safe_add_column" />) for idempotent column creation: if the column already exists, it is not added again; nullable, default, and type drift are still checked against the model definition.
+
+Concurrency is handled in layers:
+
+```text
+Postgres
+  uses an advisory lock to serialize bootstrap.
+
+SQLite
+  uses an asyncio.Lock inside one process.
+  across processes, it relies on SQLite file locking plus a 30-second busy_timeout.
+  this is best-effort, not a distributed lock.
+
+migrations
+  column-level changes use idempotent helpers as the final retry/concurrency guard.
+```
+
+Startup bootstrap solves a concrete problem: an old database should not wait until the first request to fail with "missing column" or "missing table". Schema bootstrap is a startup responsibility. It is related to the checkpointer/store boundary below, while remaining a separate concern.
+
+## Five Storage Surfaces
+
+Put the names on the table first:
+
+```text
+Checkpointer
+  LangGraph checkpoint storage.
+
+Store
+  LangGraph long-lived KV storage, exposed as Runtime.store.
+
+RunStore
+  DeerFlow run metadata storage.
+
+RunEventStore
+  DeerFlow run event stream storage.
+
+ThreadMetaStore
+  DeerFlow thread list and ownership metadata storage.
+```
+
+### Checkpointer: Graph State And Resume Points
+
+The checkpointer comes from LangGraph. The async Gateway creates it with `make_checkpointer()` (<SourceRef file="backend/packages/harness/deerflow/runtime/checkpointer/async_provider.py" sha="7e7f0410" symbol="make_checkpointer" />).
+
+It stores thread checkpoints. The core pieces are:
+
+```text
+channel_values
+  messages
+  title
+  thread_data
+  sandbox
+  other ThreadState fields
+
+metadata
+  step
+  source
+  writes
+  parents
+  created_at / updated_at
+
+tasks / pending_writes
+  interrupts, errors, next tasks, and other execution details
+```
+
+Its main consumers are:
+
+```text
+/threads/{thread_id}/state
+/threads/{thread_id}/history
+/runs/wait final channel_values
+cancel(action=rollback)
+run_agent finally reads title and syncs it into thread_meta
+```
+
+So the checkpointer is what decides whether the next turn can continue the conversation. Whether message history, sandbox_id, and thread_data can be restored depends on whether the checkpointer is persistent.
+
+### Store: LangGraph Long-Lived KV
+
+Store is created by `make_store()` (<SourceRef file="backend/packages/harness/deerflow/runtime/store/async_provider.py" sha="7e7f0410" symbol="make_store" />) and is passed into:
+
+```python
+Runtime(context=runtime_ctx, store=store)
+agent.store = store
+```
+
+It is not the checkpoint store. It does not save every graph step. It is the long-lived key-value storage capability that LangGraph exposes to the agent runtime.
+
+DeerFlow also has a compatibility use: when there is no SQL session factory, `MemoryThreadMetaStore` stores thread metadata under the Store namespace `("threads",)`. So in memory mode, the thread list may borrow Store; in sqlite or postgres mode, thread listing mainly uses the `threads_meta` table.
+
+### RunStore: The External Lifecycle Of A Run
+
+The SQL implementation of RunStore is `RunRepository` (<SourceRef file="backend/packages/harness/deerflow/persistence/run/sql.py" sha="7e7f0410" symbol="RunRepository" />), used by `RunManager`.
+
+It stores the external run record:
+
+```text
+run_id
+thread_id
+assistant_id
+user_id
+status
+model_name
+multitask_strategy
+metadata / kwargs
+error
+created_at / updated_at
+token usage
+token_usage_by_model
+message_count
+first_human_message
+last_ai_message
+```
+
+These fields serve:
+
+```text
+list runs for a thread
+query current run status
+check status before cancel
+aggregate token usage
+recognize orphaned inflight runs after restart
+```
+
+RunStore does not save the full conversation and does not restore LangGraph state.
+
+`token_usage_by_model` on the `runs` table (<SourceRef file="backend/packages/harness/deerflow/persistence/run/model.py" sha="7e7f0410" symbol="RunRow" />) fixes the accounting shape for multi-model runs. One run may include lead-agent model calls, subagent calls, and middleware calls. Those cannot be accurately grouped by the run's single `model_name`. `token_usage_by_model` stores input, output, and total tokens for each model used.
+
+### RunEventStore: Messages And Execution Events
+
+RunEventStore is the event stream interface (<SourceRef file="backend/packages/harness/deerflow/runtime/events/store/base.py" sha="7e7f0410" symbol="RunEventStore" />). The SQL implementation is `DbRunEventStore` (<SourceRef file="backend/packages/harness/deerflow/runtime/events/store/db.py" sha="7e7f0410" symbol="DbRunEventStore" />).
+
+One event roughly contains:
+
+```text
+thread_id
+run_id
+event_type
+category
+content
+metadata
+seq
+created_at
+```
+
+`category` matters:
+
+```text
+message
+  user-visible messages.
+
+trace / middleware / outputs / error
+  debugging, audit, and lifecycle records.
+```
+
+`seq` is an increasing sequence within the same thread, used for pagination and ordering. The SQL backend enforces uniqueness for `(thread_id, seq)`.
+
+RunEventStore consumers include:
+
+```text
+/threads/{thread_id}/messages
+/threads/{thread_id}/runs/{run_id}/messages
+/threads/{thread_id}/runs/{run_id}/events
+```
+
+It is good for asking "what happened?" It is not the authority for graph state. Restoring graph state still goes through the checkpointer.
+
+### ThreadMetaStore: Thread List Metadata
+
+The SQL implementation is `ThreadMetaRepository` (<SourceRef file="backend/packages/harness/deerflow/persistence/thread_meta/sql.py" sha="7e7f0410" symbol="ThreadMetaRepository" />).
+
+It stores:
+
+```text
+thread_id
+assistant_id
+user_id
+display_name
+status
+metadata
+created_at / updated_at
+```
+
+This is not the conversation body and not a checkpoint. It is the information needed for thread lists, ownership checks, and search.
+
+For example, `/threads/search` does not scan every checkpoint. It queries ThreadMetaStore. When a run finishes, the worker reads `title` from the latest checkpoint and syncs it into `threads_meta.display_name`, so the list page can show a title quickly.
+
+## How One Run Writes Them
+
+`start_run()` (<SourceRef file="backend/app/gateway/services.py" sha="7e7f0410" symbol="start_run" />) and `run_agent()` (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="7e7f0410" symbol="run_agent" />) connect the main path:
+
+```text
+1. start_run()
+   RunManager.create_or_reject()
+   -> create a RunRecord
+   -> write a pending row to RunStore
+
+2. start_run()
+   upsert thread_meta
+   -> create if missing
+   -> set status=running if present
+
+3. run_agent()
+   RunManager.set_status(running)
+   -> update RunStore
+
+4. run_agent()
+   capture the pre-run checkpoint
+   -> used later for rollback
+
+5. agent.astream(...)
+   LangGraph executes
+   -> checkpointer keeps writing checkpoints
+   -> StreamBridge pushes SSE
+
+6. RunJournal callback
+   -> converts LLM / tool / middleware callbacks into run events
+   -> aggregates tokens and message summary
+
+7. run_agent() ends
+   -> success / error / interrupted
+   -> update RunStore status
+
+8. finally
+   -> journal.flush()
+   -> update_run_completion()
+   -> sync checkpoint.title into thread_meta.display_name
+   -> set thread_meta.status to idle/error/interrupted
+
+9. bridge.publish_end()
+   -> end SSE
+   -> bridge cleanup
+```
+
+That path gives three different meanings to "messages":
+
+```text
+SSE
+  online events visible to the current connection.
+
+RunEventStore
+  event stream that can be queried later.
+
+Checkpointer
+  graph state needed by the next turn.
+```
+
+They can all contain message-shaped data, but their contracts are different.
+
+## RunJournal
+
+`RunJournal` (<SourceRef file="backend/packages/harness/deerflow/runtime/journal.py" sha="7e7f0410" symbol="RunJournal" />) is a LangChain callback handler. It does not run the agent and does not decide state transitions. It observes LLM, tool, and chain callbacks, then writes events into RunEventStore.
+
+It also builds two useful aggregates:
+
+```text
+event stream
+  llm.human.input
+  llm.ai.response
+  llm.tool.result
+  middleware:...
+  run.start / run.end / run.error
+
+run summary
+  total_input_tokens
+  total_output_tokens
+  total_tokens
+  llm_call_count
+  lead_agent_tokens
+  subagent_tokens
+  middleware_tokens
+  token_usage_by_model
+  message_count
+  first_human_message
+  last_ai_message
+```
+
+Why write the summary back to RunStore? Because list pages and token statistics should not scan the full event stream every time. RunEventStore keeps the details; RunStore keeps the common summary fields. That is a read-path optimization.
+
+The accounting is grouped by the model that produced each LLM response. `RunJournal` accumulates total tokens, extracts the model name from each response's `response_metadata.model_name` or `model` field, and updates a per-model accumulator. Subagents and middleware contribute extra token records back to the parent run. At completion, all of this lands in `RunStore.update_run_completion()`. Therefore `/threads/{thread_id}/token-usage` `by_model` means "how many tokens did each model produce under this thread"; it is broader than "how many tokens did the lead model use".
+
+`RunRepository.aggregate_tokens_by_thread()` (<SourceRef file="backend/packages/harness/deerflow/persistence/run/sql.py" sha="7e7f0410" symbol="RunRepository.aggregate_tokens_by_thread" />) prefers each row's `token_usage_by_model` JSON. If older rows do not have that content, it falls back to the legacy `model_name + total_tokens` shape. Note that `by_model[model].runs` is not a mutually exclusive count: if one run used multiple models, that run can count under multiple models.
+
+<Tradeoff leftTitle="Separate storage" rightTitle="Synchronization required">
+  <ul slot="left">
+    <li>checkpoint focuses on resumable graph state.</li>
+    <li>run rows support lists and statistics.</li>
+    <li>event streams support message pagination and audit.</li>
+  </ul>
+  <ul slot="right">
+    <li>run completion has to synchronize several surfaces.</li>
+    <li>if one sync fails, list views and state can be briefly inconsistent.</li>
+  </ul>
+</Tradeoff>
+
+## LangGraph State And DeerFlow Runtime State
+
+To answer "what recovers after restart?", first separate two kinds of state.
+
+LangGraph state enters the checkpointer as graph channel values:
+
+```text
+messages
+title
+thread_data
+sandbox
+artifacts
+promoted tools
+other ThreadState fields
+```
+
+Those fields serve:
+
+```text
+the next conversation turn
+state/history APIs
+rollback
+tool runtime context
+```
+
+DeerFlow Gateway runtime state is managed separately:
+
+```text
+RunRecord
+  asyncio.Task, abort_event, and status in the current process.
+
+RunRow
+  queryable run metadata and token summary.
+
+RunEventRow
+  messages, execution events, and audit records.
+
+ThreadMetaRow
+  thread list, title, owner, and status.
+
+StreamBridge buffer
+  current-run SSE subscribers and short-lived buffering.
+
+app.state singletons
+  checkpointer, store, event_store, run_manager, and other startup objects.
+```
+
+These are for cancellation, queries, display, authorization, and online transport. They should not be mixed into `ThreadState`.
+
+## What Recovers After Restart
+
+Recovery depends on the backend for each surface:
+
+```text
+persistent checkpointer
+  can restore thread state, history, messages, title, thread_data, sandbox_id, and other graph state.
+
+persistent run_store
+  can restore run lists, run status, and token summary.
+
+persistent run_event_store
+  db/jsonl can restore messages and events.
+  memory loses them.
+
+persistent thread_meta
+  SQL backend can restore thread lists and owners.
+  MemoryThreadMetaStore can recover only if the LangGraph Store behind it is persistent.
+
+StreamBridge
+  in-process transport layer.
+  cannot recover after restart.
+
+asyncio.Task / abort_event
+  in-process objects.
+  cannot recover after restart.
+```
+
+So a persisted run row does not mean the run is still executing. The Python task that was executing it disappeared with the process.
+
+`RunManager.reconcile_orphaned_inflight_runs()` (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/manager.py" sha="7e7f0410" symbol="RunManager.reconcile_orphaned_inflight_runs" />) handles exactly that:
+
+```text
+database still has pending/running runs
+but the current process has no matching task
+=> mark them as error
+```
+
+The goal is not to resume execution. It is to turn an uncertain state into a clear failure so the UI does not display `running` forever.
+
+## Cancel And Rollback
+
+`RunManager.cancel()` can only cancel a task in the current process:
+
+```text
+record.abort_event.set()
+record.task.cancel()
+record.status = interrupted
+```
+
+That makes cancellation a process-local capability. Another process may see the run row in RunStore, but it cannot directly cancel this process's `asyncio.Task`.
+
+Rollback is about graph state. Before a run starts, `run_agent()` captures a pre-run checkpoint snapshot. If the user chooses `action=rollback`, the worker restores the checkpoint to the state before the run began.
+
+That is not a database transaction rollback. It writes a new recovery point into the checkpointer:
+
+```text
+pre-run checkpoint
+  -> copy content
+  -> assign a new checkpoint id / ts
+  -> write it back to the checkpointer
+```
+
+So rollback reverts LangGraph state. It does not undo every external side effect. For example, files written in the sandbox or side effects in external services need separate handling.
+
+## API Serialization
+
+Checkpoints store LangChain and LangGraph objects. The frontend cannot receive those objects directly. `runtime/serialization.py` (<SourceRef file="backend/packages/harness/deerflow/runtime/serialization.py" sha="7e7f0410" symbol="serialize_channel_values_for_api" />) converts them into JSON-ready data.
+
+It also protects one practical API boundary. `ViewImageMiddleware` may place base64 image blocks inside hidden messages for model use. When REST state/history is returned, `serialize_channel_values_for_api()` removes `data:` image blocks from messages marked `hide_from_ui`, avoiding large internal context from leaking into frontend responses.
+
+Serialization is therefore not only format conversion. It also enforces part of the API boundary.
+
+## Debts Already Paid Down
+
+If you only remember an older implementation, it is tempting to list "no formal migration/upgrade path for application tables" as a persistence debt. In the current code, that is no longer accurate: `persistence.bootstrap`, the Alembic baseline, `0002_runs_token_usage`, and the idempotent column helper are all on the startup path.
+
+That does not mean persistence has no remaining design issues. Schema bootstrap answers "how are tables created and upgraded?" The split-brain risk below answers "do all runtime stores consume the same persistence config?" These are different problems.
+
+## Remaining Split-Brain Risk
+
+The code already has a unified config shape:
+
+```yaml
+database:
+  backend: sqlite | postgres | memory
+```
+
+`DatabaseConfig` (<SourceRef file="backend/packages/harness/deerflow/config/database_config.py" sha="7e7f0410" symbol="DatabaseConfig" />) intends one backend to govern both the checkpointer and DeerFlow application data.
+
+The startup path is not fully unified yet:
+
+```text
+make_checkpointer(config)
+  supports legacy checkpointer
+  also supports the new database config
+
+init_engine_from_config(config.database)
+  supports the new database config
+
+make_store(config)
+  only reads legacy checkpointer
+  falls back to InMemoryStore when checkpointer is absent
+```
+
+That creates a concrete risk:
+
+```text
+only database.sqlite is configured, no legacy checkpointer
+
+checkpointer
+  may be SQLite-persistent.
+
+RunRepository / ThreadMetaRepository
+  are SQL-persistent.
+
+LangGraph Store
+  may still be InMemoryStore.
+```
+
+This is a split-brain shape: in the same Gateway, different state surfaces choose persistence backend from different config sources. Some state can recover and some cannot, while the user may assume "I configured database.sqlite, so persistence is on".
+
+This is not necessarily fatal for conversation recovery if the app mostly relies on checkpoint state. But it is semantically inconsistent for LangGraph Store, memory, future extensions, and embedded/sync paths.
+
+<Design30>
+3.0 should parse persistence config into a single `PersistenceProfile`, then make every factory consume that profile. `make_checkpointer()`, `make_store()`, RunRepository, and RunEventStore should not each re-decide the backend. Startup should also reject incoherent combinations, such as `run_events.backend=db` with `database.backend=memory`.
+</Design30>
+
+## Final Rule
+
+Do not describe persistence as one big promise like "turn on the database and everything recovers". Ask per object:
+
+```text
+Can conversation state recover?
+  check the checkpointer.
+
+Can the thread list recover?
+  check ThreadMetaStore.
+
+Can run lists and token statistics recover?
+  check RunStore.
+
+Can messages and audit events recover?
+  check RunEventStore.
+
+Can an executing task recover?
+  no. asyncio.Task is process-local.
+
+Can an SSE connection recover?
+  no. StreamBridge is an online transport layer.
+```
+
+That is the most important mental model of this chapter: DeerFlow persistence is a set of layered contracts, not a single switch. For every layer, ask what it stores, who consumes it, and how much recovery it promises after restart.

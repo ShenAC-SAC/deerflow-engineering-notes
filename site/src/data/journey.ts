@@ -1,16 +1,15 @@
-// 旅程地图(单一数据源):8 站的卡片元数据,双语。
-// 深读正文走 MDX(src/content/tutorials/<lang>/<slug>.mdx),只有 status:'published' 的站才有。
+// 旅程地图(单一数据源):9 站的卡片元数据,双语。
+// 深读正文走 MDX(src/content/tutorials/<lang>/<slug>.mdx)。
+// status:'published' 表示旅程卡片开放入口,且该站必须同时有 zh/en 正文。
+// locked 站可以先有单语草稿,但不从卡片入口开放。
 // 这样「地图」是数据、「深读」是内容,各自演化、互不绑架。
 
 export type Lang = 'zh' | 'en';
-export type Altitude = '实现' | '架构' | '哲学';
 export type Status = 'published' | 'locked';
 
 export interface Station {
   station: number;          // 旅程序号,唯一
   slug: string;             // 对应 MDX 文件名(不含语言),如 02-lead-agent-factory
-  risk: number;             // 1..5,改动影响范围
-  altitude: Altitude;       // 抽象高度
   status: Status;
   title: Record<Lang, string>;
   mentalModel: Record<Lang, string>;   // 一句话心智模型(卡片核心信息)
@@ -19,84 +18,84 @@ export interface Station {
 
 export const JOURNEY: Station[] = [
   {
-    station: 1, slug: '01-request-entry', risk: 2, altitude: '实现', status: 'published',
-    title: { zh: '请求入口与 Agent 主链', en: 'Request entry and the agent chain' },
-    mentalModel: { zh: '一句话怎么变成一次 run', en: 'How a prompt becomes a run' },
+    station: 1, slug: '01-request-entry', status: 'published',
+    title: { zh: '请求入口与 Run 托管', en: 'Request entry and run hosting' },
+    mentalModel: { zh: '把用户输入托管成可观察、可控制的 run', en: 'Host user input as an observable, controllable run' },
     teaser: {
-      zh: '模型开口之前，DeerFlow 要先创建 run、装入上下文，并把执行事件持续流回前端。',
-      en: 'Before the model speaks, DeerFlow creates a run, installs context, and streams execution events back to the frontend.',
+      zh: '进入图执行前，Gateway 会先把请求登记成有生命周期、上下文、事件流和断连策略的运行单元。',
+      en: 'Before graph execution, Gateway records the request as a run with lifecycle, context, event stream, and disconnect policy.',
     },
   },
   {
-    station: 2, slug: '02-lead-agent-factory', risk: 3, altitude: '架构', status: 'published',
+    station: 2, slug: '02-lead-agent-factory', status: 'published',
     title: { zh: 'lead-agent 工厂', en: 'Lead-agent factory' },
-    mentalModel: { zh: '装配线，不负责思考', en: 'Assembly line, not the brain' },
+    mentalModel: { zh: '把配置装配成可运行的 agent 图', en: 'Assemble config into a runnable agent graph' },
     teaser: {
-      zh: '图工厂不负责推理。它把模型、工具、中间件、prompt 和状态结构装配成一张能运行的图。',
-      en: 'The graph factory does not reason; it assembles model, tools, middleware, prompt, and state schema into a runnable graph.',
+      zh: '图工厂把模型、工具、中间件、prompt 和状态结构装配成一张能运行的图；推理发生在后续的图执行阶段。',
+      en: 'The graph factory assembles model, tools, middleware, prompt, and state schema into a runnable graph; reasoning happens during graph execution.',
     },
   },
   {
-    station: 3, slug: '03-tools-assembly', risk: 4, altitude: '架构', status: 'published',
+    station: 3, slug: '03-tools-assembly', status: 'published',
     title: { zh: '工具装配', en: 'Tool assembly' },
-    mentalModel: { zh: '工具配上了，不代表会暴露给模型', en: 'A configured tool can stay hidden' },
+    mentalModel: { zh: '工具注册了，不代表这次 agent 就能用', en: 'Registered tools are not automatically available to this run' },
     teaser: {
-      zh: '工具列表不是静态注册表。一次 run 会暴露哪些工具，取决于配置、模型能力、沙箱、skill 和 MCP 策略。',
-      en: 'A run sees tools through config, model capability, sandbox rules, skills, and MCP policy, not through a static registry.',
+      zh: '工具注册完成后不会全部开放；一次 run 能动用哪些外部能力，要经过配置、模型、沙箱、skill 和 MCP 策略共同收敛。',
+      en: 'After tools are registered, config, model, sandbox, skills, and MCP policy still decide what this run may use.',
     },
   },
   {
-    station: 4, slug: '04-middleware-pipeline', risk: 4, altitude: '架构', status: 'published',
-    title: { zh: '中间件管线(上)· 请求怎么穿进洋葱', en: 'Middleware pipeline I · inbound through the onion' },
-    mentalModel: { zh: 'Middleware 不是一条普通流水线，而是一颗包住执行边界的洋葱：请求进入时外层先执行，结果返回时内层先处理。', en: 'Middleware is not a pipeline — it\'s an onion wrapped around the execution boundary: outer layers fire first on the way in, inner layers fire first on the way out.' },
+    station: 4, slug: '04-middleware-pipeline', status: 'published',
+    title: { zh: '中间件管线(上)· 模型调用前的运行时准备', en: 'Middleware pipeline I · preparing the run before model calls' },
+    mentalModel: { zh: '模型调用前，middleware 先建立上下文、资源和协议边界', en: 'Before model calls, middleware establishes context, resources, and protocol boundaries' },
     teaser: {
-      zh: '真正调用模型之前，十来层中间件已经把目录、沙箱、上传、记忆、历史协议全部铺好。这一站走「向内」那半程。',
-      en: 'Before a run ever calls the model, a dozen middleware layers prepare directories, sandbox, uploads, memory, and a protocol-clean history. This stop walks the inbound half.',
+      zh: '模型调用前，DeerFlow 会把目录、沙箱、上传、记忆和消息协议整理成模型可以安全消费的运行时上下文。',
+      en: 'Before the model is called, DeerFlow shapes directories, sandbox, uploads, memory, and message protocol into model-ready runtime context.',
     },
   },
   {
-    station: 5, slug: '05-middleware-return', risk: 5, altitude: '架构', status: 'published',
-    title: { zh: '中间件管线(下)· 回答怎么穿出洋葱', en: 'Middleware pipeline II · outbound through the onion' },
-    mentalModel: { zh: '模型给出回答后，谁先看到，谁就有权改写', en: 'After it speaks, whoever sees the answer first gets to rewrite it' },
+    station: 5, slug: '05-middleware-return', status: 'published',
+    title: { zh: '中间件管线(下)· 模型输出后的裁决与收尾', en: 'Middleware pipeline II · adjudication and cleanup after model output' },
+    mentalModel: { zh: '模型输出之后，middleware 负责裁决、工具准入和资源收尾', en: 'After model output, middleware adjudicates, gates tools, and cleans up resources' },
     teaser: {
-      zh: '模型给出回答之后，洋葱开始向外走：安全、循环、子 agent、工具边界、副作用，逆序登场，各有改写权。',
-      en: 'Once the model speaks, the onion unwinds outward: safety, loops, subagents, tool boundaries, side effects — in reverse order, each with a say.',
+      zh: '模型输出会先经过安全、循环、子 agent 并发、工具边界和资源释放等处理，再决定这轮 run 是否继续。',
+      en: 'Model output first passes through safety, loop, subagent fan-out, tool-boundary, and cleanup handling before the run continues.',
     },
   },
   {
-    station: 6, slug: '06-sandbox', risk: 4, altitude: '实现', status: 'locked',
+    station: 6, slug: '06-sandbox', status: 'published',
     title: { zh: '沙箱系统', en: 'Sandbox system' },
-    mentalModel: { zh: '能力边界，不只是文件系统', en: 'A capability boundary, not a filesystem' },
+    mentalModel: { zh: '工具的执行环境', en: 'The execution environment for tools' },
     teaser: {
-      zh: '沙箱不是文件系统包装，而是一道能力边界：它决定 agent 能访问哪些外部资源。',
-      en: 'The sandbox is not a filesystem wrapper. It defines which external resources an agent may access.',
+      zh: '沙箱定义工具的执行环境和能力边界：它决定 agent 能访问哪些外部资源。',
+      en: 'The sandbox defines the tool execution environment and the capability boundary for external resources.',
     },
   },
   {
-    station: 7, slug: '07-subagents', risk: 4, altitude: '架构', status: 'locked',
+    station: 7, slug: '07-subagents', status: 'published',
     title: { zh: '子 agent 系统', en: 'Subagent system' },
-    mentalModel: { zh: '委派不是多开一个工具', en: 'Delegation is not another tool' },
+    mentalModel: { zh: '把复杂子任务委派给受限的完整 agent', en: 'Delegate complex subtasks to constrained full agents' },
     teaser: {
-      zh: '在 2.x 里，委派能力通过 task_tool 暴露。能力开关和工具列表耦在一起，这是后续设计需要拆开的地方。',
-      en: 'In 2.x, delegation is exposed through task_tool, coupling capability with tool visibility. Later design needs to split those concerns.',
+      zh: '子 agent 会在共享工作现场里启动另一个完整 agent，同时收窄工具、生命周期和结果回流。',
+      en: 'A subagent starts another full agent in the shared workspace while narrowing tools, lifecycle, and result flow.',
     },
   },
   {
-    station: 8, slug: '08-skills', risk: 3, altitude: '架构', status: 'locked',
+    station: 8, slug: '08-skills', status: 'published',
     title: { zh: '技能系统', en: 'Skill system' },
-    mentalModel: { zh: '把最小权限写进工具策略', en: 'Least privilege belongs in tool policy' },
+    mentalModel: { zh: '把经验沉淀成 agent 的系统能力', en: 'Turn experience into system-level agent capability' },
     teaser: {
-      zh: 'skill 不只是追加 prompt，还能用 allowed_tools 收敛工具集，把最小权限落到运行时。',
-      en: 'A skill does more than append prompt text; allowed_tools narrows the runtime toolset.',
+      zh: 'skill 用来补强 agent 系统能力：把流程、资料、脚本和权限边界打包成可复用单元。',
+      en: 'A skill strengthens the agent system by packaging workflows, references, scripts, and permission boundaries into reusable capability.',
     },
   },
   {
-    station: 9, slug: '09-persistence', risk: 3, altitude: '实现', status: 'locked',
+    station: 9, slug: '09-persistence', status: 'published',
     title: { zh: '持久化 · store · checkpointer', en: 'Persistence: store and checkpointer' },
-    mentalModel: { zh: 'run 结束后，什么被记住了', en: 'What survives a run' },
+    mentalModel: { zh: '让 agent 的运行记录可恢复、可查询、可审计', en: 'Make agent runs resumable, queryable, and auditable' },
     teaser: {
-      zh: 'store 与 checkpointer 分工不同：一个存长期状态，一个存可回滚的执行快照。最后一站，看一次 run 结束后留下了什么。',
-      en: 'store keeps long-lived state; checkpointer keeps resumable execution snapshots. The last stop asks what remains after completion.',
+      zh: 'agent 会跨轮次、调用工具并产生副作用。持久化要回答哪些状态能恢复、哪些记录能查询、哪些事实能审计。',
+      en: 'Agents span turns, call tools, and create side effects. Persistence defines what can resume, what can be queried, and what can be audited.',
     },
   },
 ];

@@ -1217,3 +1217,94 @@ Is it part of the run result or background work?
 ```
 
 If those questions are hard to answer, the middleware boundary is probably too vague.
+
+## Lower-Priority / Taste-Level Directions (Not Tutorial Design30)
+
+These came up while writing the sandbox and subagent tutorials. They are
+deliberately kept *out* of the tutorials' `Design30` callouts, because those
+callouts are reserved for problems the current design actually has — a present
+gap, risk, or coupling that blocks something real. The items below are closer
+to "this could be more elegant / more symmetric." Recorded here so the
+distinction stays visible and nothing is lost.
+
+The bar used to decide:
+
+```text
+qualifies for tutorial Design30:
+  - a present gap/risk            (e.g. host bash = static switch, an authz gap)
+  - a present coupling/arch debt  (e.g. subagent_enabled couples capability with
+                                   tool visibility; sandbox_id overloads identity
+                                   with physical-resource locator)
+    test: does the coupling block something you actually want to do? if yes -> debt
+
+stays here instead (taste-level):
+  - "could be cleaner / more symmetric", but nothing is broken today and no real
+    need is blocked
+```
+
+### Sandbox: A Resource Lifecycle Model (Taste-Level Half)
+
+The *real-debt* half of this already made it into the sandbox tutorial as a
+Design30: `sandbox_id` is overloaded — it is both the logical identity bound to
+a thread and the physical resource locator, forced equal by
+`sha256(thread_id)[:8]`. That coupling blocks "recycle/rebuild the physical
+container while keeping a stable logical identity" and "migrate a thread to a
+different container", so it qualifies as debt.
+
+The taste-level residue is everything *around* that split:
+
+```text
+today:
+  identity-vs-resource coordination is woven through the provider's acquire
+  fallback chain — process lock, active cache, deterministic id, warm pool,
+  cross-process file lock, discover, create, idle checker
+
+taste-level wish:
+  a first-class resource lifecycle model where warm pool, cross-process reuse,
+  and reclamation hang off an explicit state machine instead of an acquire
+  fallback chain
+```
+
+Why this stays taste-level: the acquire chain is *complexity concentration*,
+not harmful coupling. Concentrating cache/warm-pool/lock/idle logic inside one
+provider is arguably appropriate cohesion. Nothing is broken; it just reads as
+"a lot happening in one method." Only the `sandbox_id` overload blocks a real
+need, and that part is already a Design30.
+
+### Subagent: Execution As A First-Class Background Job (Taste-Level)
+
+2.x runs a subagent by hand-weaving:
+
+```text
+task_tool coroutine on the main loop (5s polling, non-blocking)
+  -> _scheduler_pool thread (returns task_id immediately)
+     -> run_coroutine_threadsafe onto a persistent isolated event loop
+        (reused across tasks, on its own daemon thread)
+shared blackboard: _background_tasks[task_id] -> SubagentResult
+cooperative cancel via threading.Event; terminal-status race resolved by a lock
+```
+
+Taste-level wish: promote subagent execution to a first-class background job —
+schedulable, observable, cancellable — with its own state machine and event
+stream, replacing the manual thread/loop/poll layer.
+
+Why this stays taste-level rather than tutorial Design30:
+
+```text
+cancellation latency
+  is largely a Python constraint (a running thread cannot be force-killed), not
+  a design mistake. cooperative cancel at astream iteration boundaries is the
+  honest tradeoff: cancel has delay, but state stays clean. "fixing" it is not
+  obviously cheaper or safer.
+
+cross-process invisibility
+  IS a real limitation (a background subagent is only visible inside the worker
+  that launched it), but it is lower-priority and overlaps the broader
+  best-effort-in-memory-state issue already discussed for loop detection,
+  circuit breaker, and memory debounce.
+```
+
+So the honest read: the *mechanism* is not wrong, it is flattened by the
+current LangGraph runtime constraints. A 3.0 job model would untangle it, but
+nothing here blocks a concrete need today the way the `subagent_enabled`
+capability/visibility coupling does — and that coupling is already a Design30.
