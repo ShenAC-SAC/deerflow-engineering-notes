@@ -63,11 +63,13 @@ middleware, and sandbox boundaries introduced earlier.
 
 ## Source baseline
 
-All current articles are aligned to the pinned upstream commit
-[`7e7f0410`](https://github.com/bytedance/deer-flow/commit/7e7f0410). Each article pins that
-commit in frontmatter, and every source reference is checked against the pinned upstream code
-so the prose matches the implementation it explains. When DeerFlow moves again, outdated
-explanations should be revised first, then re-pinned.
+All current articles are based on DeerFlow **v2.0.0** and pinned to the upstream
+release commit [`7e7f0410`](https://github.com/bytedance/deer-flow/commit/7e7f0410).
+The release version gives the human baseline; the commit SHA makes every source
+anchor reproducible. Each article carries that commit in frontmatter, and every
+source reference is checked against the pinned upstream code so the prose matches
+the implementation it explains. When DeerFlow moves again, outdated explanations
+should be revised first, then re-pinned.
 
 ## Local preview
 
