@@ -11,40 +11,30 @@
 
 ---
 
-This is a source-reading tutorial for DeerFlow's Python agent runtime. It does
-not tour folders one by one. It follows the main product path: a user request is
-accepted by the Gateway, becomes a managed **run**, enters the lead-agent graph,
-receives a tool surface, passes through middleware, executes tools in a sandbox,
-delegates work to subagents, loads skills, and leaves recoverable runtime records.
+This is a source-reading tutorial for DeerFlow's Python agent runtime. Instead
+of touring folders one by one, it follows the main product path: a user request
+is accepted by the Gateway, becomes a managed **run**, enters the lead-agent
+graph, receives a tool surface, passes through middleware, executes tools in a
+sandbox, delegates work to subagents, loads skills, and leaves recoverable
+runtime records.
 
-The goal is to make DeerFlow understandable as an engineering system, beyond
-a collection of agent tricks. Every article pairs a plain-language explanation
-with source anchors pinned to the exact upstream commit it describes.
+The goal is to make DeerFlow understandable as an engineering system. Every
+article pairs a plain-language explanation with source anchors pinned to the
+exact upstream commit it describes.
 
 ## Who this is for
 
-These notes are for readers who want to understand how an industrial agent
-project is put together:
+These notes are for readers who want source-backed explanations of how an
+industrial agent project is put together:
 
 - You can read Python and want a guided path through the runtime.
-- You are new to DeerFlow and do not know where to start.
 - You want to understand run lifecycle, tools, middleware, sandboxing,
   subagents, skills, and persistence as one connected system.
-- You prefer source-backed explanations over architecture slogans.
 
 This is not a replacement for the official repository. It is a map for reading it.
 For the full picture — code, issues, roadmap, and actual development — go to:
 
 > **→ [bytedance/deer-flow](https://github.com/bytedance/deer-flow)**
-
-## What This Tutorial Teaches
-
-The main idea is simple: an agent product is more than "send a prompt to a model".
-DeerFlow has to host long-running work, decide which tools are available, prepare
-runtime context, gate tool execution, isolate external side effects, delegate
-subtasks, load reusable skills, and persist the right state after the process exits.
-
-The tutorial follows those responsibilities in the order a run encounters them.
 
 ## Reading path
 
@@ -58,8 +48,8 @@ The tutorial follows those responsibilities in the order a run encounters them.
 8. **Skill system** — how experience becomes installable, reviewable, reusable agent capability.
 9. **Persistence, store, and checkpointer** — what can resume, what can be queried, and what can be audited.
 
-If you are new to DeerFlow, read in order. Later chapters assume the run, tool,
-middleware, and sandbox boundaries introduced earlier.
+Read in order. Later chapters assume the run, tool, middleware, and sandbox
+boundaries introduced earlier.
 
 ## Source baseline
 
