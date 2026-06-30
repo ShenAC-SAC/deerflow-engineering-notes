@@ -1,7 +1,7 @@
 # Engineering CLAUDE.md
 
 > Engineering rules for AI coding agents — drop these into a project's `CLAUDE.md`
-> (or `AGENTS.md`) so the agent writes code you will not have to rewrite.
+> (or `AGENTS.md`) so you rewrite less of what the agent produces.
 
 **What this is.** A distilled, copy-pasteable set of rules for getting a language
 model to produce code that survives review. Adapted from Andrej Karpathy's
