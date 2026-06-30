@@ -85,9 +85,10 @@ pnpm check
 ## Repository layout
 
 ```text
-site/      Astro + MDX blog (the canonical public version)
-notes/     source-reading notes and design observations kept for traceability
-assets/    README artwork and repo-level visuals
+site/                  Astro + MDX blog (the canonical public version)
+notes/                 source-reading notes and design observations kept for traceability
+assets/                README artwork and repo-level visuals
+Engineering_CLAUDE.md  engineering rules to drop into a project's CLAUDE.md before contributing
 ```
 
 ## Notes vs. site
@@ -95,6 +96,22 @@ assets/    README artwork and repo-level visuals
 The `site/` directory is the public reading experience. The `notes/` directory is
 the working notebook behind it: source-reading notes, design observations, and
 rougher material kept so the polished tutorial can stay traceable.
+
+## Engineering CLAUDE.md
+
+Alongside the reading notes, this repo keeps
+**[`Engineering_CLAUDE.md`](./Engineering_CLAUDE.md)** — a distilled set of
+engineering rules for AI coding agents, adapted from Andrej Karpathy's
+widely-shared *CLAUDE.md* notes on LLM-assisted programming.
+
+It is here for one practical reason: **if you want to contribute to DeerFlow,
+paste these rules into the project's `CLAUDE.md` before you let a coding agent
+loose.** DeerFlow's `CLAUDE.md` imports `AGENTS.md`, so append them to the
+relevant `AGENTS.md`. They are project-agnostic craft rules — read before you
+write, keep diffs surgical, write the failing test first, justify every
+dependency — that make an agent's contributions land closer to mergeable on the
+first try. They complement DeerFlow's repo-orientation docs (which tell an agent
+*where things are*) by telling it *how to write and change code*.
 
 ## Status & contributing
 
