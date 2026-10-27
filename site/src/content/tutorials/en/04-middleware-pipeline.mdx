@@ -22,7 +22,7 @@ import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 import { link } from '../../../utils/link';
 
-With the model and tools selected, middleware prepares the input: conversation history, project scope, uploaded files, and the current date. Long conversations may also need compaction. Throughout these transformations, tool calls and results must retain their message protocol.
+With the model and tools selected, middleware prepares the input. Think of middleware as processing logic attached at fixed points (hooks) in the agent loop: before and after each model call, and around each tool call. Here it prepares: conversation history, project scope, uploaded files, and the current date. Long conversations may also need compaction. Throughout these transformations, tool calls and results must retain their message protocol.
 
 **Identify a middleware's hook and state ownership before interpreting its position in the list.** One object can participate at both model and tool boundaries.
 
@@ -82,7 +82,7 @@ An uploaded file still needs a usable virtual path and context for the model. Pr
 
 These preserve useful continuity without relying exclusively on an ever-growing transcript. Delegation identity includes run context: repeated provider tool-call IDs across runs must not identify the same execution.
 
-When enabled and triggered, <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> compacts history while retaining recent context and protocol boundaries. Compaction does not turn evidence into verified conclusions. Summaries, task notes, and child reports remain fallible; source recovery can be necessary.
+When enabled and triggered, <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> compacts history while retaining recent context and protocol boundaries. Compaction does not turn evidence into verified conclusions. Summaries, task notes, and child reports remain fallible; re-verification against the original sources can be necessary.
 
 ## wrap_model_call: produce a request view
 

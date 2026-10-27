@@ -77,7 +77,7 @@ TokenBudget 是可配置的 run 预算机制。它依赖可用 usage 计数，�
 
 ## 大结果、artifact 与报告文件
 
-<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ToolOutputBudgetMiddleware" /> 将超大结果持久化并用有类型的摘要和文件引用代替；持久化不可用时有有界降级路径。对于已经被后续成功读写取代的历史 `write_file.content`，还可以只在模型请求视图里缩减参数，保留原始 state、checkpoint 和凭据。
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ToolOutputBudgetMiddleware" /> 将超大结果持久化并用有类型的摘要和文件引用代替；持久化不可用时，走一条有上限的降级路径。对于已经被后续成功读写取代的历史 `write_file.content`，还可以只在模型请求视图里缩减参数，保留原始 state、checkpoint 和凭据。
 
 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/artifact_capture_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ArtifactCaptureMiddleware" /> 的捕获发生在下一轮 `before_model`，不是在工具 wrapper 中把每个返回值再包一层 Command。它从结果中提取产物引用，维护 `tool_artifacts`，供后续 handle 使用。
 

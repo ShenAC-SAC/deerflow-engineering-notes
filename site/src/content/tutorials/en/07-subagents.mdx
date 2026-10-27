@@ -68,7 +68,7 @@ The normal result path uses a Command containing a ToolMessage to return the res
 - Per-run total limits prevent repeated rounds from creating unlimited children.
 - Child turn/time limits bound each admitted execution.
 
-`max_turns` counts agent turns and is translated into super-steps for the assembled graph. Concurrency, total delegation, turns, and timeout have separate settings; follow their effective values for the run.
+`max_turns` counts agent turns and is translated into LangGraph super-steps (one whole-graph advance each) for the assembled graph. Concurrency, total delegation, turns, and timeout have separate settings; follow their effective values for the run.
 
 ## Completed is not accepted
 

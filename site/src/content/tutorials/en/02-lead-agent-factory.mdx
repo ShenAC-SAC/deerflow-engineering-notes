@@ -43,7 +43,7 @@ The factory returns `LeadAgentAssembly` with the executable graph, effective mod
 
 | Function | Result and purpose |
 | --- | --- |
-| `make_lead_agent(config)` | Returns `assemble_lead_agent(config).graph`, preserving the Server ABI |
+| `make_lead_agent(config)` | Returns `assemble_lead_agent(config).graph`, preserving the LangGraph Server factory signature |
 | `assemble_lead_agent(config, *, app_config=None)` | Resolves configuration, freezes checkpoint mode, and returns the assembly |
 | `_assemble_lead_agent(config, *, app_config)` | Computes and builds the actual graph |
 | `_make_lead_agent(config, *, app_config)` | Preserves graph-only callers without the public entrance's mode freeze |
@@ -91,6 +91,8 @@ Bootstrap is a narrow branch for creating custom agents. Some webhook origins wi
 This is not a per-prompt preference. Processes sharing checkpoint storage must be compatible. Changes require restart and checks against existing data.
 
 ## What the descriptor records
+
+`LeadAgentAssembly` has three core fields:
 
 | Field | Meaning |
 | --- | --- |

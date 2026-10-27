@@ -76,7 +76,7 @@ artifact：供结构化处理、引用与界面消费
 
 | placement | 想观察的边界 |
 | --- | --- |
-| MODEL_LOGICAL | 外于重试的一次逻辑模型决策 |
+| MODEL_LOGICAL | 不含重试的一次逻辑模型决策 |
 | MODEL_PHYSICAL | 经过请求变换后的一次实际 provider 调用；重试会再次进入 |
 | TOOL_VISIBLE | 经过截断、净化、错误包装后，模型看见的工具结果 |
 | TOOL_RAW | 紧邻真实工具调用的原始返回 |
@@ -86,7 +86,7 @@ artifact：供结构化处理、引用与界面消费
 
 ## 异常隔离不是权限隔离
 
-<SourceRef file="backend/packages/harness/deerflow/extensions/isolation.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="IsolatedMiddleware" /> 为观察型扩展隔离故障，并跟踪 downstream handler 是否已经调用。handler 之前扩展出错，可以继续调用一次；handler 已完成后扩展出错，应复用已经得到的结果，不能再发一次模型请求或重复工具副作用。
+<SourceRef file="backend/packages/harness/deerflow/extensions/isolation.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="IsolatedMiddleware" /> 为观察型扩展隔离故障，并跟踪 downstream handler 是否已经调用。handler 调用前扩展出错，可以继续调用一次；handler 已完成后扩展出错，应复用已经得到的结果，不能再发一次模型请求或重复工具副作用。
 
 这是错误处理边界，**不是对任意第三方 Python 代码的进程沙箱**。也不能拿观察型的 fail-open 行为代替真正授权策略的拒绝语义。
 

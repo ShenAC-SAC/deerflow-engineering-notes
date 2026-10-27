@@ -22,7 +22,7 @@ import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 import { link } from '../../../utils/link';
 
-为了比较方案，agent 可能需要读取文件、搜索资料、委派研究，最后写出报告。这些能力要经过装配与授权。**工具系统分别决定：有哪些候选工具、本轮暴露哪些 schema、这次调用是否允许执行。**
+为了比较方案，agent 可能需要读取文件、搜索资料、委派研究，最后写出报告。这些能力要经过装配与授权。**工具系统分别决定：有哪些候选工具、本轮暴露哪些 schema、这次调用是否允许执行。** 这里的 schema 指工具的名称、说明和参数格式，是模型“看见”一个工具的全部内容。
 
 <FlowDiagram caption="主路径的能力收敛；middleware 声明的工具也要经过授权检查。"
  chart={`flowchart TD
@@ -43,7 +43,7 @@ import { link } from '../../../utils/link';
 
 配置中的 `name` 是配置标签，`BaseTool.name` 才是模型 schema 与运行时路由使用的名称。最后的去重也按工具实际名称进行，因此同名工具的来源与先后顺序会影响结果。
 
-MCP 和 ACP 提供外部能力；extension 工具也要通过宿主的装配与策略，不应被理解成额外的免检入口。
+MCP（Model Context Protocol）和 ACP（Agent Client Protocol）分别用于接入外部工具和外部 agent；extension 工具也要通过宿主的装配与策略，不应被理解成额外的免检入口。
 
 ## 授权覆盖所有工具来源
 

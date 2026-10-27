@@ -46,7 +46,7 @@ export const JOURNEY: Station[] = [
   },
   {
     station: 4, slug: '04-middleware-pipeline', status: 'published',
-    title: { zh: '中间件管线(上)· 模型调用前的运行时准备', en: 'Middleware pipeline I · preparing the run before model calls' },
+    title: { zh: '中间件管线（上）：把对话准备成模型输入', en: 'Middleware I — preparing the conversation for the model' },
     mentalModel: { zh: '模型调用前，middleware 先建立上下文、资源和协议边界', en: 'Before model calls, middleware establishes context, resources, and protocol boundaries' },
     teaser: {
       zh: '模型调用前，DeerFlow 会把目录、沙箱、上传、记忆和消息协议整理成模型可以安全消费的运行时上下文。',
@@ -55,7 +55,7 @@ export const JOURNEY: Station[] = [
   },
   {
     station: 5, slug: '05-middleware-return', status: 'published',
-    title: { zh: '中间件管线(下)· 模型输出后的裁决与收尾', en: 'Middleware pipeline II · adjudication and cleanup after model output' },
+    title: { zh: '中间件管线（下）：从模型输出到有据可查的结果', en: 'Middleware II — from model output to inspectable results' },
     mentalModel: { zh: '模型输出之后，middleware 负责裁决、工具准入和资源收尾', en: 'After model output, middleware adjudicates, gates tools, and cleans up resources' },
     teaser: {
       zh: '模型输出会先经过安全、循环、子 agent 并发、工具边界和资源释放等处理，再决定这轮 run 是否继续。',

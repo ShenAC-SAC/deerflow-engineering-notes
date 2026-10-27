@@ -69,6 +69,8 @@ The deployment proxy forwards `/api/langgraph/*` to Gateway's compatible routes.
 
 For our prompt, the server-owned project snapshot answers “which materials?” It prevents one run from resolving project relationships differently at every step.
 
+<MarginNote>A checkpoint is the state snapshot LangGraph saves after each graph step. Resuming a conversation later depends on it. In the next section's table, “data updated and checkpointed by the graph” means exactly that saved part.</MarginNote>
+
 <MarginNote>Writing “I am an administrator” supplies text, not authority. Access to threads, models, and tools comes from authentication and authorization.</MarginNote>
 
 ## Configuration, context, and state differ
@@ -86,7 +88,7 @@ For our prompt, the server-owned project snapshot answers “which materials?”
 
 ## One execution chain, three waiting modes
 
-Background creation returns a record immediately; `/runs/stream` returns SSE; `/runs/wait` waits for completion. They share admission and lifecycle logic.
+Background creation returns a record immediately; `/runs/stream` returns SSE (Server-Sent Events, a one-way event stream from the server); `/runs/wait` waits for completion. They share admission and lifecycle logic.
 
 The bridge separates production from HTTP consumption. `on_disconnect=continue` permits execution to continue; `cancel` requests cancellation through ownership and finalization rules. Joining an existing stream observes a run without creating another or automatically inheriting the creator's disconnect policy.
 
@@ -96,7 +98,7 @@ The bridge separates production from HTTP consumption. `on_disconnect=continue` 
 
 <SourceRef file="backend/packages/harness/deerflow/runtime/runs/manager.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="RunManager" /> handles admission, state, ownership, and cancellation. <SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="run_agent" /> invokes the graph, publishes events, and finalizes. Neither is the model.
 
-With heartbeat enabled, remote cancellation can persist an intent for the owner to observe. Expired-run recovery must also check ownership. Single-process mode has different boundaries, developed at stop nine.
+With heartbeat enabled, remote cancellation can persist an intent for the owner to observe. Expired-run recovery must also check ownership. Single-process mode has different boundaries, covered at stop nine.
 
 <Philosophy>
 Gateway turns model interaction into manageable application execution. The cost is maintaining boundaries between the SDK protocol, graph state, and business records. Identify who accepts, owns, observes, and terminates the request.

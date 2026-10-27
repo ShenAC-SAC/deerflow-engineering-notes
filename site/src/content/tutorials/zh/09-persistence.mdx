@@ -75,7 +75,7 @@ import { link } from '../../../utils/link';
 
 - 空库建立当前表结构并标记 migration head。
 - 存在应用表但没有 Alembic 版本记录的数据库，先补齐 baseline 表，再执行后续 revision。
-- 已版本化数据库按 Alembic 升级。
+- 已版本化数据库按 Alembic（SQLAlchemy 的数据库迁移工具）升级。
 - 对未知或不兼容的 migration revision 拒绝启动；经过明确审查的前向兼容窗口按专门规则处理。
 
 这与图状态的 `full / delta` 表示是不同问题。默认的 full 与可选 delta 决定累积 channel 怎样保存；共享数据库的进程必须使用兼容模式，修改需重启。

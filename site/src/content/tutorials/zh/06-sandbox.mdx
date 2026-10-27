@@ -27,13 +27,13 @@ import { link } from '../../../utils/link';
 
 Sandbox 提供统一操作接口，具体隔离能力取决于执行环境。Local、容器与远端服务的边界不同；阅读实现时，需要分别检查路径、命令、网络与操作系统隔离。
 
-## 两个接口，再加一层执行租约
+## 两个接口、一层租约、一个接入点
 
 | 层 | 职责 | 源码 |
 | --- | --- | --- |
 | Sandbox | 读写、列目录、搜索、执行命令等能力 | <SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Sandbox" /> |
 | SandboxProvider | acquire、按身份查找、release、技能同步 | <SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox_provider.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SandboxProvider" /> |
-| execution lease | 记录哪些并发执行仍借用同一 sandbox | <SourceRef file="backend/packages/harness/deerflow/sandbox/lease.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> |
+| execution lease | 记录哪些并发执行仍借用同一 sandbox；lease（租约）可以理解为“借用登记”，用完要归还 | <SourceRef file="backend/packages/harness/deerflow/sandbox/lease.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> |
 | SandboxMiddleware | 将图生命周期接到 provider 与 lease | <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SandboxMiddleware" /> |
 
 ThreadState 主要保存 sandbox 身份，不保存一个活的 Docker 客户端。provider 持有实际资源与客户端；恢复时须确认 checkpoint 中的 sandbox ID 对应可用资源，并核对 thread 和 user。
@@ -54,7 +54,7 @@ ThreadState 主要保存 sandbox 身份，不保存一个活的 Docker 客户端
 
 ## 会话身份、资源句柄与归属检查
 
-`thread_id` 是产品会话身份，`sandbox_id` 是资源句柄。<SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox_provider.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SandboxProvider.get_scoped" /> 要按 thread/user 查找，默认无法证明归属就返回空，再通过规范 acquire 路径解析资源。
+`thread_id` 是产品会话身份，`sandbox_id` 是资源句柄。<SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox_provider.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SandboxProvider.get_scoped" /> 按 thread 和 user 查找资源。默认实现在无法证明归属时返回空；调用方随后走规范的 acquire 路径取得资源。
 
 恢复长期会话时，checkpoint 中的资源记录可能仍在，但对应进程、容器或客户端可能已经退出。因此复用前需要确认资源存在且归属匹配。
 

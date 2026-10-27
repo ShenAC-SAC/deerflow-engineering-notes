@@ -68,7 +68,7 @@ import { link } from '../../../utils/link';
 - 每 run 总量限制：不能通过多轮不断发新 task 绕开预算。
 - 子执行 turn/time 限制：一个已启动的子 agent 能运行多久。
 
-`max_turns` 表示 agent 轮次，需要按装配后的图结构换算为 super-step 预算。并发、总量、轮次与超时各有配置，阅读时应跟踪本次运行的有效值。
+`max_turns` 表示 agent 轮次，需要按装配后的图结构换算成 LangGraph 的 super-step（图整体推进一步）预算。并发、总量、轮次与超时各有配置，阅读时应跟踪本次运行的有效值。
 
 ## completed 不等于验收通过
 
@@ -82,7 +82,7 @@ import { link } from '../../../utils/link';
 | JSON / CSV 条件 | 支持范围内的语法或表头 | 完整 schema 与业务语义正确 |
 | 自由文本要求 | 未必可确定性检查 | 不能自动判为通过 |
 
-<SourceRef file="backend/packages/harness/deerflow/subagents/acceptance_checks.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 对无法判定或证据不足的条件保留 `UNVERIFIED`。已完成执行、条件不满足和缺少证据是三种不同结果；lead 应复用已有有效产物，只补足未满足的条件。
+<SourceRef file="backend/packages/harness/deerflow/subagents/acceptance_checks.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 对无法判定或证据不足的条件保留 `UNVERIFIED`。已完成执行、条件不满足和缺少证据是三种不同结果；lead 应复用已经成立的产物，只补足未满足的条件。
 
 对于报告，文件存在可以自动验证，但三种方案的比较是否公允、来源是否支持结论，仍需检查实际材料。
 

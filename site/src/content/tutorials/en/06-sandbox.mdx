@@ -27,13 +27,13 @@ Suppose the model decides to read project files and write the report. Tool schem
 
 Sandbox provides a common operations interface; isolation depends on the execution environment. Local execution, containers, and remote services require separate checks for paths, commands, networking, and operating-system isolation.
 
-## Two interfaces and an execution lease
+## Two interfaces, one lease, one middleware
 
 | Layer | Responsibility | Source |
 | --- | --- | --- |
 | Sandbox | Files, search, commands | <SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Sandbox" /> |
 | SandboxProvider | Acquire, identity-aware lookup, release, skill synchronization | <SourceRef file="backend/packages/harness/deerflow/sandbox/sandbox_provider.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SandboxProvider" /> |
-| Execution lease | Tracks concurrent borrowers of a sandbox | <SourceRef file="backend/packages/harness/deerflow/sandbox/lease.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> |
+| Execution lease | Tracks concurrent borrowers of a sandbox; think of a lease as a borrowing record that must be returned | <SourceRef file="backend/packages/harness/deerflow/sandbox/lease.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> |
 | Middleware | Connects graph lifecycle to provider and lease | <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SandboxMiddleware" /> |
 
 ThreadState stores identity rather than a live Docker client. Providers hold resources and clients. Recovery verifies the resource and its thread/user ownership before reuse.

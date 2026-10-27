@@ -63,7 +63,7 @@ import { link } from '../../../utils/link';
 
 ## 模型选择包括能力归一化
 
-常规选择从请求、agent 默认和全局配置解析模型，再应用授权。显式选择还要校验请求与标记一致且模型可用，不能把无权使用的显式模型静默解释成另一个模型。
+常规选择从请求、agent 默认和全局配置解析模型，再应用授权。如果用户显式指定了模型，还要校验 `model_selection_requested` 与解析出的 `model_name` 一致、且该模型已配置；不满足就直接报错，而不是悄悄换成另一个模型。
 
 `thinking_enabled` 等选项区分“未传”与“显式 false”。<SourceRef file="backend/packages/harness/deerflow/models/reasoning.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="resolve_reasoning_request" /> 再按模型的 reasoning contract 处理：关闭不支持的 thinking、开启必需的 thinking，或将 effort 映射成 provider 的词汇。
 

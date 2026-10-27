@@ -44,7 +44,7 @@ A skill can specify how to select sources, format citations, and check a report.
 
 ## Packages, metadata, and ownership
 
-<SourceRef file="backend/packages/harness/deerflow/skills/types.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Skill" /> records name, description, location, category, enabled state, compatibility fields, and secret requirements. <SourceRef file="backend/packages/harness/deerflow/skills/parser.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> parses frontmatter and discovers packages. A directory containing SKILL.md is a package boundary, not a reason to register every nested file as another top-level skill.
+<SourceRef file="backend/packages/harness/deerflow/skills/types.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Skill" /> records name, description, location, category, enabled state, compatibility fields, and secret requirements. <SourceRef file="backend/packages/harness/deerflow/skills/parser.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> parses frontmatter (the metadata block between `---` lines at the top of SKILL.md) and discovers packages. A directory containing SKILL.md is a package boundary, not a reason to register every nested file as another top-level skill.
 
 Public skills are shared. <SourceRef file="backend/packages/harness/deerflow/skills/storage/user_scoped_skill_storage.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="UserScopedSkillStorage" /> scopes custom skills to a user while retaining shared public reads. Integration packages join through their registry and projection mechanisms, contributing another source of discoverable skills.
 

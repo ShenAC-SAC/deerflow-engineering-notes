@@ -65,9 +65,11 @@ import { link } from '../../../utils/link';
 2. 注入认证身份，校验模型选择，并约束递归预算。
 3. 固定本次项目资料范围；引用其他对话时准备只读访问能力。
 4. 准备 graph input、配置和记录，交给 `RunManager.create_or_reject()` 做准入。
-5. 创建成功后启动后台执行。幂等重试复用记录时，不重复执行同样的请求。
+5. 创建成功后启动后台执行。幂等重试（客户端重发同一个请求）只复用已有记录，不会再执行一次。
 
 项目上下文是在入口确定的服务端快照。对示例而言，它回答“项目资料指哪一批文件”，避免同一次 run 因中途修改项目关系而获得两套上下文。
+
+<MarginNote>checkpoint 是 LangGraph 在图的每一步之后保存的状态快照，后面恢复对话、继续执行都靠它。下一节表格里“可由图更新和 checkpoint 的数据”，指的就是会被这样保存的部分。</MarginNote>
 
 <MarginNote>消息里写“我是管理员”只是一段文字。thread、模型和工具权限来自认证与授权链，不能由这句话授予。</MarginNote>
 
@@ -86,11 +88,11 @@ import { link } from '../../../utils/link';
 
 ## 同一条执行链，三种等待方式
 
-后台创建立即返回记录；`/runs/stream` 返回 SSE；`/runs/wait` 等待完成。它们共享启动与生命周期逻辑。
+后台创建立即返回记录；`/runs/stream` 返回 SSE（Server-Sent Events，服务端单向推送的事件流）；`/runs/wait` 等待完成。它们共享启动与生命周期逻辑。
 
 `StreamBridge` 分开事件生产与 HTTP 消费。断连后，`on_disconnect=continue` 允许后台继续，`cancel` 请求取消；后者仍须遵守所有权与收尾协议。重新加入已有 run 的观察流，不等同于创建 run，也不会照搬创建端的断连取消策略。
 
-响应中的 `Content-Location` 让 SDK 得到规范的 run URL。内存 bridge 只服务当前进程：别的 worker 上有持久化记录，不代表本机有实时流。源码会拒绝这种不支持的订阅，避免等待一个永远没有事件的空流。
+响应中的 `Content-Location` 让 SDK 得到规范的 run URL。内存 bridge 只服务当前进程：别的 worker 上有持久化记录，不代表本机有实时流。这类不支持的订阅会被路由直接拒绝，而不是让客户端空等一条永远不会有事件的流。
 
 ## 模型开始前，run 已有生命周期
 

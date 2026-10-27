@@ -44,7 +44,7 @@ import { link } from '../../../utils/link';
 
 ## 包、元数据与存储范围
 
-<SourceRef file="backend/packages/harness/deerflow/skills/types.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Skill" /> 记录名称、描述、目录、分类、启用状态、兼容字段和 secret 声明。<SourceRef file="backend/packages/harness/deerflow/skills/parser.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 解析 frontmatter 并发现技能包；`SKILL.md` 所在目录是包边界，不能把每个深层同名文件都当成独立顶级技能。
+<SourceRef file="backend/packages/harness/deerflow/skills/types.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Skill" /> 记录名称、描述、目录、分类、启用状态、兼容字段和 secret 声明。<SourceRef file="backend/packages/harness/deerflow/skills/parser.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 解析 frontmatter（SKILL.md 开头用 `---` 包起来的元数据）并发现技能包；`SKILL.md` 所在目录是包边界，不能把每个深层同名文件都当成独立顶级技能。
 
 public 技能是共享来源；custom 技能需要明确用户归属。<SourceRef file="backend/packages/harness/deerflow/skills/storage/user_scoped_skill_storage.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="UserScopedSkillStorage" /> 将用户的 custom 内容放进其自己的范围，同时保留共享 public 读取。集成技能通过对应的注册与投影机制加入运行时，共同构成可发现的技能来源。
 
@@ -88,7 +88,7 @@ parser 与 Skill 保存 `allowed-tools`，用于兼容和元数据交换。这�
 
 这不是所有 provider 都天然支持的保证。不能实施物理技能隔离的 provider 必须明确处理受限配置；子 agent 也不能重建 lead 拥有的共享投影。
 
-## 安装与扫描是一条提交路径
+## 从安装到发布有一道关口
 
 <SourceRef file="backend/packages/harness/deerflow/skills/installer.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="safe_extract_skill_archive" /> 无条件约束归档路径、成员数量、解压大小和可执行二进制等风险。扫描配置启用后，原生 <SourceRef file="backend/packages/harness/deerflow/skills/skillscan/orchestrator.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 和内容安全扫描再检查包内文本及脚本，然后才发布到目标存储。
 

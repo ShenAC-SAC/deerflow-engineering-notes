@@ -75,7 +75,7 @@ Resolve the effective backend using this precedence, then check its durability. 
 
 - Empty databases create current tables and stamp migration head.
 - Databases with application tables but no Alembic revision backfill baseline tables and apply subsequent revisions.
-- Versioned databases use Alembic upgrades.
+- Versioned databases use Alembic (SQLAlchemy's migration tool) upgrades.
 - Unknown/incompatible revisions are rejected, with explicitly reviewed forward-compatibility windows rather than arbitrary acceptance.
 
 This differs from `full / delta` graph-state representation. Optional delta mode changes accumulating-channel persistence. Shared processes need compatible modes and changes require restart.

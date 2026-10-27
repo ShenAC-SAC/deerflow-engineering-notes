@@ -2,7 +2,7 @@
 lang: en
 slug: 03-tools-assembly
 station: 3
-title: "Tool assembly: candidates, visibility, and execution"
+title: "Tool assembly — candidates, visibility, and execution"
 sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
 sourceRefs:
   - backend/packages/harness/deerflow/tools/tools.py
@@ -22,7 +22,7 @@ import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 import { link } from '../../../utils/link';
 
-Comparing options may require file reads, search, delegation, and a final report write. These capabilities pass through assembly and authorization. **The tool system decides which candidates exist, which schemas are visible, and whether a particular call may execute.**
+Comparing options may require file reads, search, delegation, and a final report write. These capabilities pass through assembly and authorization. **The tool system decides which candidates exist, which schemas are visible, and whether a particular call may execute.** A schema here is the tool's name, description, and parameter format: everything the model “sees” of a tool.
 
 <FlowDiagram caption="Capability narrowing on the main path. Middleware-declared tools also undergo authorization."
  chart={`flowchart TD
@@ -43,7 +43,7 @@ Comparing options may require file reads, search, delegation, and a final report
 
 A configuration `name` labels an entry; `BaseTool.name` identifies the model schema and execution route. Deduplication uses the actual tool name, making source order relevant for collisions.
 
-MCP and ACP supply external capabilities. Extension tools also participate in host assembly and policy; they are not exempt entry points.
+MCP (Model Context Protocol) and ACP (Agent Client Protocol) connect external tools and external agents respectively. Extension tools also participate in host assembly and policy; they are not exempt entry points.
 
 ## Authorization covers every tool source
 

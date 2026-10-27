@@ -41,8 +41,8 @@ For the full picture — code, issues, roadmap, and actual development — go to
 1. **Request entry** — how Gateway hosts user input as a managed run.
 2. **Lead-agent factory** — how runtime config becomes a runnable agent graph.
 3. **Tool assembly** — why registered tools are not automatically available to a run.
-4. **Middleware pipeline I** — how DeerFlow prepares context before model calls.
-5. **Middleware pipeline II** — how model output is adjudicated, gated, and cleaned up.
+4. **Middleware I** — how the conversation is prepared for the model.
+5. **Middleware II** — how model output is adjudicated, gated, and cleaned up.
 6. **Sandbox system** — where tools execute, and why local and container sandboxes are not the same boundary.
 7. **Subagent system** — how complex subtasks are delegated to constrained full agents.
 8. **Skill system** — how experience becomes installable, reviewable, reusable agent capability.

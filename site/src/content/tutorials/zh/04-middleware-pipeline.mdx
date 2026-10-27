@@ -22,7 +22,7 @@ import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
 import { link } from '../../../utils/link';
 
-模型和工具选好后，middleware 负责准备模型输入。对于报告请求，这包括消息历史、项目资料范围、上传文件和当前时间；对话较长时还需要压缩上下文。处理这些内容的同时，middleware 也维护工具调用与结果的消息协议。
+模型和工具选好后，middleware 负责准备模型输入。middleware 可以理解为挂在 agent 循环固定位置上的一段处理逻辑：模型调用前后、工具调用前后，都有可以插入的位置（hook）。对于报告请求，这包括消息历史、项目资料范围、上传文件和当前时间；对话较长时还需要压缩上下文。处理这些内容的同时，middleware 也维护工具调用与结果的消息协议。
 
 **读 middleware 时，先问它挂在哪个 hook、读写哪种状态，再问它在列表中的位置。** 同一个对象可能同时参与模型调用和工具执行。
 
@@ -97,7 +97,7 @@ ThreadData 建立 thread 目录信息，Uploads 读取本轮上传上下文，Sa
 
 这些消息保留明确的权限层级：active goal 表达用户设定的目标，按用户请求处理；摘要、委派报告等历史字段按数据处理，不获得系统指令权限。
 
-## 一处修补，可能影响多个 provider
+## 消息变换都要守住 provider 契约
 
 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 处理悬空 tool call。净化、压缩、故障回退和历史裁剪都可能改变消息，必须一起维护“调用与结果成对”的契约。
 
