@@ -20,4 +20,19 @@ const tutorials = defineCollection({
   }),
 });
 
-export const collections = { tutorials };
+const extensions = defineCollection({
+  loader: glob({
+    pattern: '**/*.mdx',
+    base: './src/content/extensions',
+    generateId: ({ entry }) => entry.replace(/\.mdx$/, ''),
+  }),
+  schema: z.object({
+    lang: z.enum(['zh', 'en']),
+    slug: z.string(),
+    title: z.string(),
+    sha: z.string(),
+    sourceRefs: z.array(z.string()).min(1),
+  }),
+});
+
+export const collections = { tutorials, extensions };

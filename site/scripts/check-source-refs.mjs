@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 锚定校验:每篇 MDX 的 sourceRefs 必须在其 frontmatter 钉死的 sha 下,
-// 真实存在于 deer-flow 仓库。防止源码演进后教程指针悄悄失真。
+// Validate frontmatter and inline references at the shared source baseline.
+// Python symbols are parsed with Python 3.12+ without executing upstream code.
 //
 // 用法: node scripts/check-source-refs.mjs   (从 tutorials/site 运行)
 // 退出码: 0 全部命中 / 1 有缺失(并列出)
@@ -11,12 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));        // <repo>/site/scripts
-const contentDir = resolve(here, '../src/content/tutorials');
+const contentDir = resolve(here, '../src/content');
+const baseline = JSON.parse(readFileSync(resolve(here, '../src/data/source.json'), 'utf8'));
 // deer-flow 仓库根:优先 DEERFLOW_ROOT(独立仓库 / CI 用);
-// 兜底用相对路径(本仓库仍躺在 deer-flow 工作树里时仍可用)。
+// 默认使用与本项目同级的 deer-flow clone。
 const deerflowRoot = process.env.DEERFLOW_ROOT
   ? resolve(process.env.DEERFLOW_ROOT)
-  : resolve(here, '../../..');
+  : resolve(here, '../../../deer-flow');
 
 // 锚定校验依赖一份本地 deer-flow clone。找不到就清晰报错,别静默放行。
 if (!existsSync(join(deerflowRoot, 'backend'))) {
@@ -57,32 +58,87 @@ function parseFrontmatter(text) {
   return { sha, refs };
 }
 
-function existsAtSha(sha, path) {
-  // 去掉 ::symbol / #symbol,只校验文件路径
-  const file = path.split('::')[0].split('#')[0].trim();
+const sourceCache = new Map();
+function sourceAtSha(sha, file) {
+  const key = `${sha}:${file}`;
+  if (sourceCache.has(key)) return sourceCache.get(key);
   try {
-    execFileSync('git', ['-C', deerflowRoot, 'cat-file', '-e', `${sha}:${file}`], {
-      stdio: 'ignore',
+    const source = execFileSync('git', ['-C', deerflowRoot, 'show', key], {
+      encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return true;
+    sourceCache.set(key, source);
+    return source;
   } catch {
-    return false;
+    sourceCache.set(key, null);
+    return null;
   }
+}
+
+// Parse definitions without importing or executing upstream code.
+const symbolCache = new Map();
+function hasPythonSymbol(sha, file, symbol, source) {
+  const key = `${sha}:${file}`;
+  if (!symbolCache.has(key)) {
+    const script = `import ast, json, sys
+tree = ast.parse(sys.stdin.read())
+names = []
+def visit(node, prefix=''):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = prefix + child.name
+            names.append(name)
+            visit(child, name + '.')
+        else:
+            visit(child, prefix)
+visit(tree)
+print(json.dumps(names))`;
+    symbolCache.set(key, new Set(JSON.parse(execFileSync(process.env.PYTHON || 'python3', ['-c', script], {
+      input: source, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
+    }))));
+  }
+  return symbolCache.get(key).has(symbol);
 }
 
 const files = walk(contentDir);
 let checked = 0;
+let symbolsChecked = 0;
 const failures = [];
 
 for (const f of files) {
-  const fm = parseFrontmatter(readFileSync(f, 'utf8'));
-  if (!fm) continue;
+  const body = readFileSync(f, 'utf8');
+  const fm = parseFrontmatter(body);
+  if (!fm) { failures.push(`${f}: 缺少 frontmatter`); continue; }
   if (!fm.sha) { failures.push(`${f}: 缺少 sha`); continue; }
+  if (fm.sha !== baseline.sha) failures.push(`${f}: sha 与 source.json 不一致`);
   if (!fm.refs.length) { failures.push(`${f}: sourceRefs 为空`); continue; }
-  for (const ref of fm.refs) {
+  const refs = fm.refs.map((ref) => {
+    const [file, symbol] = ref.split(/::|#/);
+    return { file: file.trim(), symbol, sha: fm.sha };
+  });
+  for (const match of body.matchAll(/<SourceRef\b([^>]*?)\/>/g)) {
+    const props = match[1];
+    const file = props.match(/\bfile="([^"]+)"/)?.[1];
+    const sha = props.match(/\bsha="([^"]+)"/)?.[1];
+    const symbol = props.match(/\bsymbol="([^"]+)"/)?.[1];
+    if (!file || !sha) { failures.push(`${f}: SourceRef 必须有静态 file/sha`); continue; }
+    if (sha !== fm.sha) failures.push(`${f}: 行内 SourceRef sha 与 frontmatter 不一致`);
+    if (!fm.refs.some((ref) => ref.split(/::|#/)[0].trim() === file)) failures.push(`${f}: 行内源码未登记于 sourceRefs: ${file}`);
+    refs.push({ file, sha, symbol });
+  }
+  for (const { file, sha, symbol } of refs) {
     checked++;
-    if (!existsAtSha(fm.sha, ref)) {
-      failures.push(`${f}\n    ✗ ${ref}  @${fm.sha}  (在该 SHA 下不存在)`);
+    const source = sourceAtSha(sha, file);
+    if (source === null) {
+      failures.push(`${f}\n    ✗ ${file}  @${sha}  (在该 SHA 下不存在)`);
+    } else if (symbol) {
+      symbolsChecked++;
+      try {
+        if (!file.endsWith('.py') || !hasPythonSymbol(sha, file, symbol, source)) {
+          failures.push(`${f}: 未找到 Python 定义 ${file}::${symbol}`);
+        }
+      } catch (error) {
+        failures.push(`${f}: 不能解析 ${file}: ${error.message}`);
+      }
     }
   }
 }
@@ -94,4 +150,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`✓ 锚定校验通过:${files.length} 篇 / ${checked} 个源码指针,全部在钉死的 SHA 下命中。`);
+console.log(`✓ 锚定校验通过:${files.length} 篇 / ${checked} 个源码引用 / ${symbolsChecked} 个 Python 符号；基线与行内引用一致。正文语义仍需源码阅读核对。`);

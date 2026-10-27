@@ -1,0 +1,104 @@
+---
+lang: zh
+slug: goals-and-scheduling
+title: "长期目标与调度：一次请求怎样延续"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
+sourceRefs:
+  - backend/packages/harness/deerflow/runtime/goal.py
+  - backend/packages/harness/deerflow/agents/goal_state.py
+  - backend/packages/harness/deerflow/runtime/goal_progress.py
+  - backend/packages/harness/deerflow/runtime/runs/worker.py
+  - backend/app/gateway/routers/threads.py
+  - backend/app/gateway/services.py
+  - backend/app/scheduler/service.py
+  - backend/packages/harness/deerflow/scheduler/runtime.py
+  - backend/packages/harness/deerflow/scheduler/schedules.py
+  - backend/packages/harness/deerflow/persistence/scheduled_task_runs/sql.py
+  - backend/packages/harness/deerflow/config/deployment_config.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
+
+“生成一份报告”由 run 承载执行；“把报告补到满足目标”由 goal 约束继续过程；“每周生成一次报告”由 schedule 决定启动时间。**三者通过执行、目标与时间三个层面协作。**
+
+本专题中的“长期”描述跨步骤或跨请求的目标与任务，不表示后台永远运行，也不表示所有错误都自动重试。
+
+## 先分清四个对象
+
+| 对象 | 回答什么 |
+| --- | --- |
+| thread goal | 当前对话希望达成什么 |
+| run | 当前这次执行是否在运行、完成或中断 |
+| scheduled task | 以后何时启动、执行什么、归谁所有 |
+| occurrence | 某次触发是否排队、启动、运行或结束 |
+
+goal 可以存在于普通聊天；schedule 可以周期性创建执行。一个模型回复结束，不代表目标满足；一个定时任务已启用，也不代表某次 occurrence 成功。
+
+## Goal：以证据决定是否继续
+
+<SourceRef file="backend/app/gateway/routers/threads.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 提供 thread goal API；<SourceRef file="backend/packages/harness/deerflow/runtime/goal.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="build_goal_state" /> 建立目标状态，<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="run_agent" /> 在运行中消费它。
+
+<FlowDiagram caption="有界 goal continuation。缺少证据、等待用户和外部等待不会变成无限重试。"
+ chart={`flowchart TD
+ G["用户设定 goal"] --> STATE["checkpoint 保存目标"]
+ STATE --> RUN["正常 agent graph 执行"]
+ RUN --> EVAL["goal evaluator：结合对话与工具证据"]
+ EVAL --> MET{"目标满足？"}
+ MET -->|是| OUT["写 achieved outcome 并清除 active goal"]
+ MET -->|否| WHY{"可继续的 blocker 且预算允许？"}
+ WHY -->|是| NEXT["加入隐藏 continuation，继续图调用"]
+ NEXT --> RUN
+ WHY -->|否| STOP["停止本轮自动推进，保留原因"]`} />
+
+<SourceRef file="backend/packages/harness/deerflow/runtime/goal.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="should_continue_goal" /> 只对允许继续的 blocker 放行，并检查 continuation 与无进展次数。`goal_not_met_yet` 在预算允许时可以继续；`needs_user_input`、`external_wait`、`missing_evidence` 会停止本轮自动推进。
+
+<SourceRef file="backend/packages/harness/deerflow/runtime/goal_progress.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 参与运行进展的观察；评估也会保留理由、证据摘要和是否依赖假设。它仍包含模型判断，不能把 evaluator 的 satisfied 当作独立人工验收。
+
+目标完成时，<SourceRef file="backend/packages/harness/deerflow/agents/goal_state.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="GoalOutcomeState" /> 记录 achieved 结果，与清除 active goal 的 checkpoint 更新关联。停止继续不必然意味着目标完成；更新 goal 也必须遵守当前 thread 的运行与 checkpoint 冲突边界。
+
+## Schedule：重新进入同一条 run 主线
+
+<SourceRef file="backend/packages/harness/deerflow/scheduler/schedules.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="next_run_at" /> 计算 once、cron 或 interval 的下一次时间，处理时区与时间规范化。<SourceRef file="backend/app/scheduler/service.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ScheduledTaskService" /> 则负责认领、排队、启动和结果协调：
+
+~~~text
+任务到期
+  → 持久化 queued occurrence
+  → 在容量与属主限制下 claim
+  → launching（有 lease）
+  → launch_scheduled_thread_run
+  → Gateway start_run
+  → 普通 run 执行与终态
+  → occurrence 与下一次调度更新
+~~~
+
+<SourceRef file="backend/app/gateway/services.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="launch_scheduled_thread_run" /> 复用 Gateway 正常启动路径。定时任务不是绕过模型授权、sandbox 或 run 持久化的快捷通道。
+
+<SourceRef file="backend/packages/harness/deerflow/persistence/scheduled_task_runs/sql.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ScheduledTaskRunRepository" /> 保存 occurrence 状态与执行关联。排队记录可以跨重启保留；服务依据持久化状态与租约，处理过期的启动认领和失效的执行属主。
+
+## 幂等启动与租约检查
+
+在“数据库已记录准备启动，但进程还没收到启动结果”时崩溃，重试可能重复发起执行。稳定准入键和 lease 检查将重试关联到同一次 run，过期属主不能继续用旧身份推进状态。
+
+即便如此，外部系统的副作用仍需要其自身幂等协议。schedule/run 记录去重，不自动使发邮件、提交订单或写远端文件具备 exactly-once 语义。
+
+## 调度工具使用宿主授予的能力
+
+<SourceRef file="backend/packages/harness/deerflow/scheduler/runtime.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SchedulerRunCapability" /> 是宿主绑定到当前 lead run 的能力。运行时检查它的模式和方法；数据库里的 metadata 或模型传入的 tool 参数不提供同等权限。
+
+scheduled run 使用适合无人值守场景的交互策略。遇到需要用户澄清的条件时，应明确记录阻塞原因，并分别追踪停止规则、通知、任务与 occurrence 状态。
+
+## 多实例调度的共享条件
+
+<SourceRef file="backend/packages/harness/deerflow/config/deployment_config.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 与 Gateway 启动检查要求匹配的共享数据库、heartbeat 和 stream bridge。scheduler 的 multi-instance 模式还有数据库事件存储等前提，排队与全局容量通过持久化认领来协调。
+
+用户想“每周继续更新报告”时，真正需要保存的是任务定义与 occurrence；用户想“这次把报告补完整”时，先看 goal continuation 的理由与预算。选择正确机制，才能解释暂停、失败、恢复和再次执行。
+
+<Philosophy>
+持续工作需要三个独立答案：什么时候启动、为什么继续、什么时候停止。schedule 回答时间，goal 约束推进，run 提供执行生命周期。将它们拆开，才能让自动化既可恢复，也有明确的停止边界。
+</Philosophy>
+
+这两条扩展路径最终都回到 <a href={link('/zh/journey/1')}>第一站的 run 准入</a>，并受 <a href={link('/zh/journey/9')}>第九站的持久化与所有权</a>约束。

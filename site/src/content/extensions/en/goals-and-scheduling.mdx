@@ -1,0 +1,104 @@
+---
+lang: en
+slug: goals-and-scheduling
+title: "Goals and scheduling — continuing beyond one request"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
+sourceRefs:
+  - backend/packages/harness/deerflow/runtime/goal.py
+  - backend/packages/harness/deerflow/agents/goal_state.py
+  - backend/packages/harness/deerflow/runtime/goal_progress.py
+  - backend/packages/harness/deerflow/runtime/runs/worker.py
+  - backend/app/gateway/routers/threads.py
+  - backend/app/gateway/services.py
+  - backend/app/scheduler/service.py
+  - backend/packages/harness/deerflow/scheduler/runtime.py
+  - backend/packages/harness/deerflow/scheduler/schedules.py
+  - backend/packages/harness/deerflow/persistence/scheduled_task_runs/sql.py
+  - backend/packages/harness/deerflow/config/deployment_config.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
+
+A run executes the report request, a goal governs continuation toward an objective, and a schedule determines when future work starts. **They cooperate through execution, progress, and timing.**
+
+Here, long-running means goals and tasks spanning steps or requests, not unconditional background execution or automatic retry of every failure.
+
+## Four objects
+
+| Object | Question |
+| --- | --- |
+| Thread goal | What should this conversation achieve? |
+| Run | Is this execution active, complete, or interrupted? |
+| Scheduled task | When should future work start, what should it do, and who owns it? |
+| Occurrence | Is one trigger queued, launching, running, or terminal? |
+
+A completed reply does not establish a met goal. An enabled schedule does not establish successful execution of an occurrence.
+
+## Goals: continue based on bounded evidence
+
+<SourceRef file="backend/app/gateway/routers/threads.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> exposes goal APIs. <SourceRef file="backend/packages/harness/deerflow/runtime/goal.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="build_goal_state" /> creates state consumed by <SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="run_agent" />.
+
+<FlowDiagram caption="Bounded continuation; missing evidence, human input, and external waits do not imply endless retries."
+ chart={`flowchart TD
+ G["User sets goal"] --> STATE["Checkpoint stores objective"]
+ STATE --> RUN["Normal agent execution"]
+ RUN --> EVAL["Evaluate conversation and tool evidence"]
+ EVAL --> MET{"Satisfied?"}
+ MET -->|yes| OUT["Write achieved outcome; clear active goal"]
+ MET -->|no| WHY{"Continuable blocker and budget available?"}
+ WHY -->|yes| NEXT["Hidden continuation; invoke graph again"]
+ NEXT --> RUN
+ WHY -->|no| STOP["Stop automatic continuation; retain reason"]`} />
+
+<SourceRef file="backend/packages/harness/deerflow/runtime/goal.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="should_continue_goal" /> accepts only allowed blockers and checks continuation/no-progress limits. `goal_not_met_yet` can continue within budget; `needs_user_input`, `external_wait`, and `missing_evidence` stop automatic continuation for this execution.
+
+<SourceRef file="backend/packages/harness/deerflow/runtime/goal_progress.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> contributes progress observations. Evaluation retains reasons, evidence summaries, and assumption dependence. It still includes model judgment rather than independent human acceptance.
+
+<SourceRef file="backend/packages/harness/deerflow/agents/goal_state.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="GoalOutcomeState" /> records an achieved outcome with the checkpoint update clearing the active goal. Stopping continuation does not necessarily mean completion. Goal writes also respect thread execution and checkpoint conflicts.
+
+## Scheduling re-enters the normal run path
+
+<SourceRef file="backend/packages/harness/deerflow/scheduler/schedules.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="next_run_at" /> computes once, cron, or interval timing with timezone normalization. <SourceRef file="backend/app/scheduler/service.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ScheduledTaskService" /> coordinates claims, queues, launches, and outcomes:
+
+~~~text
+Task becomes due
+  → durable queued occurrence
+  → claim within capacity and owner limits
+  → leased launching state
+  → launch_scheduled_thread_run
+  → Gateway start_run
+  → normal execution and finalization
+  → occurrence and next schedule updated
+~~~
+
+<SourceRef file="backend/app/gateway/services.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="launch_scheduled_thread_run" /> uses normal Gateway admission. Scheduled work does not bypass model authorization, sandbox policy, or persistence.
+
+<SourceRef file="backend/packages/harness/deerflow/persistence/scheduled_task_runs/sql.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ScheduledTaskRunRepository" /> records occurrence state and run association. Queue recovery uses durable records and leases rather than guessing from an in-memory timer.
+
+## Idempotent launch and lease checks
+
+A process can crash after recording launch intent but before receiving the launch result. Stable admission keys associate retries with the same run; lease checks prevent stale owners from advancing state.
+
+This does not give arbitrary external effects exactly-once semantics. Sending a message or writing a remote file still needs its own idempotency contract.
+
+## Scheduling tools require host authority
+
+<SourceRef file="backend/packages/harness/deerflow/scheduler/runtime.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="SchedulerRunCapability" /> is bound by the host to the lead run. Runtime checks its mode and methods. Persisted metadata or model-supplied arguments cannot provide the same authority.
+
+Scheduled runs use interaction policy suitable for unattended work. A need for clarification should retain an explicit blocker. Stop rules, notifications, task state, and occurrence state are tracked separately.
+
+## Multi-instance execution needs shared contracts
+
+<SourceRef file="backend/packages/harness/deerflow/config/deployment_config.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> and Gateway startup require compatible shared storage, heartbeat, and bridging. Scheduler multi-instance mode also requires appropriate database event storage; durable claims coordinate queues and global capacity.
+
+A weekly report needs a task definition and occurrences. Completing the current report needs goal reasoning and continuation limits. Choosing the right mechanism makes pause, failure, recovery, and repeated execution understandable.
+
+<Philosophy>
+Persistent work needs separate answers for when to start, why to continue, and when to stop. Scheduling handles time, goals constrain progress, and runs provide execution lifecycle.
+</Philosophy>
+
+Both paths reconnect to <a href={link('/en/journey/1')}>run admission</a> and <a href={link('/en/journey/9')}>persistence and ownership</a>.

@@ -1,0 +1,81 @@
+---
+lang: zh
+slug: memory-backends
+title: "记忆后端：哪些经验进入下一次请求"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
+sourceRefs:
+  - backend/packages/harness/deerflow/agents/memory/manager.py
+  - backend/packages/harness/deerflow/config/memory_config.py
+  - backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py
+  - backend/packages/harness/deerflow/agents/memory/tools.py
+  - backend/packages/harness/deerflow/agents/memory/summarization_hook.py
+  - backend/packages/harness/deerflow/agents/memory/backends/deermem/deer_mem.py
+  - backend/packages/harness/deerflow/agents/memory/backends/noop/noop_manager.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
+
+用户看完报告说：“以后比较方案，请先列约束，再给结论。”下一次请求怎样得到这个偏好？
+
+先分清：**对话 messages、压缩摘要和长期记忆不是同一份数据。** messages 支撑当前图执行；summary 保持长任务连续性；memory backend 保存和召回跨请求仍有用的经验。它们可能引用同一段内容，但所有权与恢复方式不同。
+
+## 接入主线的两个位置
+
+<FlowDiagram caption="自动记忆模式的主要读写路径；是否注入与写回取决于配置和 backend。"
+ chart={`flowchart LR
+ OLD["上一轮对话"] --> MW["MemoryMiddleware"]
+ MW --> MAN["MemoryManager.add / aadd"]
+ MAN --> BACK["选中的 backend"]
+ BACK --> CTX["get_context / aget_context"]
+ NOW["新 prompt"] --> QUERY["当前问题的有界 query"]
+ QUERY --> CTX
+ CTX --> DYN["DynamicContext"]
+ DYN --> MODEL["新一轮模型请求"]`} />
+
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="MemoryMiddleware" /> 在适用的 after_agent 路径把消息、用户、agent 和 trace 信息交给 manager。<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 在新请求的动态上下文路径读取记忆，并可传递从本轮用户输入提取的有界 query。
+
+这两处之间可能有异步抽取、队列与合并。run 结束不意味着长期记忆已经同步提交，读取到的也不保证包含刚刚产生的最新事实。
+
+## MemoryManager 是接口，DeerMem 是一种实现
+
+<SourceRef file="backend/packages/harness/deerflow/agents/memory/manager.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="MemoryManager" /> 提供 add、get_context、search 及管理操作的契约，工厂按 `memory.manager_class` 解析 backend。部分管理操作属于可选能力，使用时需要确认所选 backend 的支持范围。
+
+<SourceRef file="backend/packages/harness/deerflow/config/memory_config.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="MemoryConfig" /> 将宿主公共配置与 `backend_config` 分开。DeerMem 自己解释其存储、抽取等私有选项；可选实现包括 Mem0、OpenViking、Honcho 和 noop。选择 backend 时，还需要匹配它的依赖、持久化方式与服务配置。
+
+未知 backend 配置不应静默替换为另一个存储，以免把“配置错了”变成“记忆似乎丢了”。<SourceRef file="backend/packages/harness/deerflow/agents/memory/backends/noop/noop_manager.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 是显式选择的无操作实现，与加载失败不是同一回事。
+
+## middleware 模式与 tool 模式
+
+| 模式 | 谁决定操作时机 | 对报告请求的意义 |
+| --- | --- | --- |
+| middleware | 宿主在上下文准备与执行结束处读写 | 偏好可自动抽取，后续自动提供上下文 |
+| tool | 模型通过 memory 工具主动读写 | 模型决定是否查找或保存某条经验 |
+
+<SourceRef file="backend/packages/harness/deerflow/agents/memory/tools.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 提供 memory 工具；组装时仍需经过工具授权。tool 模式通常不会按普通 middleware 模式重复写回，但某些依赖对话抽取的 backend 会声明仍需要被动写入。是否装配被动写入，由工厂根据模式和 backend 声明共同决定。
+
+`memory.enabled`、`injection_enabled`、agent 的 `memory_enabled` 也不是同一个开关：启用 backend、允许注入和允许这个 agent 使用记忆，要分别理解。
+
+## 后台更新的身份与失败处理
+
+后台更新需要在入队时捕获 user/agent/thread 身份，不能期待计时器线程自动继承请求上下文。否则可能把一个用户的偏好写到另一个范围。
+
+MemoryManager 的读取失败策略也区分可降级与必需上下文：允许降级的 backend 可返回空内容；要求记忆可用的配置会抛出读取错误，调用者应保留该语义。不能把所有异常统一吞掉并声称“没有记忆”。
+
+<SourceRef file="backend/packages/harness/deerflow/agents/memory/summarization_hook.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 还提供压缩前的记忆边界；它的用途是给 backend 一个保存将被移除内容的机会，并不保证每条历史消息都成为长期事实。
+
+## 抽取成本与关机 flush
+
+配置中有可选 prescreen 与 signal classification：分别决定哪些批次值得抽取，以及怎样提供纠正、强化等信号。off、shadow 与实际影响行为的模式不同；观察结果不等于已经改变写入决策。
+
+关机时可以调用 backend 的 `shutdown_flush`，但宿主有时间预算。它是尽力排空待处理工作，不是任意规模队列都绝不丢失的承诺。部署的退出宽限期也必须与之匹配。
+
+<Philosophy>
+长期记忆需要明确保留内容、用户隔离、召回方式、更新时机与失败策略。MemoryManager 定义宿主与 backend 的分工，让调用方可以根据这些契约理解读写行为。
+</Philosophy>
+
+回到报告示例：下次出现“先列约束”可以来自长期记忆；当前报告做到哪一步则来自图状态与 durable context。分别查看这两个来源，才能解释为什么记住了偏好，却未必能恢复上一次的文件操作。

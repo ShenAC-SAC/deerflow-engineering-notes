@@ -1,249 +1,33 @@
-# Request Entry and Agent Main Chain
+# 请求入口与 run 主链
 
-## One-line Mental Model
+基线：面向 DeerFlow 2.2.0 的开发快照，2026-10-27；非正式发布版。
+上游提交：`51d59a1cdff92626bd9f03f1b2254f34a824ca3e`。
 
-DeerFlow Gateway is the application runtime host. It receives LangGraph-compatible HTTP requests, manages run lifecycle, then builds and streams a LangGraph-backed agent graph.
+本文件是公开教程的阅读索引与核对记录，避免再维护一套独立长正文。
 
-## System Position
+## 对应主线
 
-Upstream:
+- [中文教程](../../site/src/content/tutorials/zh/01-request-entry.mdx) · [English](../../site/src/content/tutorials/en/01-request-entry.mdx)
 
-- Frontend LangGraph SDK calls
-- IM channel workers
-- External clients using LangGraph-compatible endpoints
+示例请求：请阅读项目资料，比较三种实现方案，生成一份带来源的 Markdown 报告。
 
-Downstream:
+## 已核对的当前行为
 
-- `RunManager`
-- `StreamBridge`
-- `run_agent()`
-- `make_lead_agent()`
-- LangGraph `agent.astream()`
+- 前端上传附件后 thread.submit；Web 主链由 Gateway 托管，LangGraph Server 是可选宿主。
+- start_run 规范化输入、绑定认证身份和资料范围，经 RunManager 准入后启动 run_agent。
+- 创建、stream 与 wait 共享生命周期；幂等复用、重新订阅、断连取消不能混为一谈。
+- RunRecord、Runtime.context、RunnableConfig 与 ThreadState 分属不同职责。
 
-The important distinction:
+## 源码阅读入口
 
-```text
-LangGraph
-  = execution kernel used by DeerFlow agents
+- [frontend/src/core/threads/hooks.ts](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/frontend/src/core/threads/hooks.ts)
+- [backend/app/gateway/routers/thread_runs.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/app/gateway/routers/thread_runs.py)
+- [backend/app/gateway/services.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/app/gateway/services.py)
+- [backend/packages/harness/deerflow/runtime/runs/manager.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/runtime/runs/manager.py)
+- [backend/packages/harness/deerflow/runtime/runs/worker.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/runtime/runs/worker.py)
 
-LangGraph Server
-  = optional official HTTP server/runtime
+优先跟踪：`stream_run`, `start_run`, `build_run_config`, `run_agent`, `RunManager`。
 
-DeerFlow Gateway
-  = current primary HTTP runtime, compatible with LangGraph API
-```
+## 验证边界
 
-`backend/langgraph.json` still registers `lead_agent` for LangGraph Server/Studio/CLI compatibility, but Gateway imports and calls the factory directly on the main path.
-
-## Main Flow
-
-Gateway streaming path:
-
-```text
-POST /api/threads/{thread_id}/runs/stream
-  -> stream_run()
-  -> start_run()
-  -> RunManager.create_or_reject()
-  -> resolve_agent_factory()
-  -> build_run_config()
-  -> merge_run_context_overrides()
-  -> asyncio.create_task(run_agent(...))
-  -> sse_consumer()
-```
-
-Background worker path:
-
-```text
-run_agent()
-  -> mark run running
-  -> publish metadata
-  -> build Runtime(context=...)
-  -> RunnableConfig(**config)
-  -> agent_factory(config=runnable_config)
-  -> make_lead_agent(config)
-  -> create_agent(...)
-  -> attach checkpointer/store
-  -> agent.astream(...)
-  -> publish chunks to StreamBridge
-  -> mark final run status
-  -> publish end sentinel
-```
-
-## Core Objects
-
-`RunCreateRequest`
-
-HTTP request model for creating or streaming a run.
-
-Important fields:
-
-```text
-assistant_id
-input
-config
-context
-metadata
-stream_mode
-stream_subgraphs
-interrupt_before / interrupt_after
-multitask_strategy
-on_disconnect
-```
-
-`RunManager`
-
-Owns run lifecycle:
-
-```text
-create_or_reject
-set_status
-cancel
-update progress
-persist run metadata
-```
-
-`StreamBridge`
-
-Decouples background graph execution from HTTP SSE consumption.
-
-```text
-run_agent() publishes events
-sse_consumer() reads events and formats SSE frames
-```
-
-`run_agent()`
-
-The execution worker. It is not the agent itself; it hosts and drives the graph.
-
-`make_lead_agent()`
-
-Factory that returns the compiled agent graph.
-
-## RunnableConfig Construction
-
-Gateway builds a `RunnableConfig`-shaped dict in `build_run_config()`.
-
-Main responsibilities:
-
-1. Always attach `thread_id`.
-2. Preserve caller-provided `config`.
-3. Inject `agent_name` when `assistant_id` refers to a custom agent.
-4. Merge request `context` fields into both `configurable` and `context`.
-5. Attach metadata.
-
-Important compatibility rule:
-
-```text
-config["configurable"]
-  = legacy runtime options channel
-
-config["context"]
-  = newer LangGraph runtime context channel
-
-DeerFlow writes key fields to both in Gateway compatibility mode.
-```
-
-Whitelisted context fields include:
-
-```text
-model_name
-mode
-thinking_enabled
-reasoning_effort
-is_plan_mode
-subagent_enabled
-max_concurrent_subagents
-agent_name
-is_bootstrap
-```
-
-## Runtime Context
-
-`run_agent()` creates a LangGraph `Runtime` and installs it into config:
-
-```text
-runtime.context:
-  thread_id
-  run_id
-  user_id
-  app_config
-  __run_journal
-
-config["configurable"]["__pregel_runtime"]:
-  Runtime(context=..., store=...)
-```
-
-This gives middleware and tools access to run-scoped data through LangGraph runtime APIs.
-
-## State and Config
-
-Reads:
-
-- HTTP body `input/config/context/metadata`
-- authenticated user
-- app-level runtime dependencies from FastAPI app state
-
-Writes:
-
-- run records
-- thread metadata
-- runtime context
-- stream events
-- checkpoint rollback snapshots
-- final run completion metadata
-
-Does not directly mutate agent `ThreadState`; graph execution does that.
-
-## Side Effects
-
-- Creates background asyncio task.
-- Publishes SSE events.
-- Writes run status/progress.
-- Reads/writes checkpointer snapshots for rollback.
-- Syncs generated title from checkpoint to thread metadata.
-- Flushes run journal events.
-
-## Design Tradeoffs
-
-Gateway reimplements a LangGraph-compatible API instead of relying solely on official LangGraph Server. This lets DeerFlow own:
-
-```text
-auth
-thread/run metadata
-run event store
-SSE bridge
-rollback
-frontend compatibility
-hot-reload boundaries
-application-specific persistence
-```
-
-The cost is compatibility glue: request fields must be translated into LangGraph-flavored config, stream modes must be mapped, and runtime context must be installed manually.
-
-## Risks
-
-`configurable` vs `context` is historical compatibility debt. If a field is only written to one place, older DeerFlow code or newer LangGraph `ToolRuntime.context` consumers may miss it.
-
-`run_agent()` is an orchestration-heavy function. It mixes graph invocation, persistence, stream publishing, rollback, tracing, and cleanup. This is powerful but dense.
-
-Gateway uses background tasks. Disconnect, cancellation, rollback, and final checkpoint serialization must be handled carefully to avoid returning partial state as success.
-
-## Code Reading Focus
-
-Read these files:
-
-- `backend/app/gateway/routers/thread_runs.py`
-  - `RunCreateRequest`
-  - `stream_run()`
-  - `wait_run()`
-- `backend/app/gateway/services.py`
-  - `start_run()`
-  - `build_run_config()`
-  - `merge_run_context_overrides()`
-  - `resolve_agent_factory()`
-  - `sse_consumer()`
-- `backend/packages/harness/deerflow/runtime/runs/worker.py`
-  - `run_agent()`
-  - `_build_runtime_context()`
-  - `_install_runtime_context()`
-
+这些结论来自固定提交的源码阅读与双语教程对照。站点校验检查文件、Python 定义、版本和页面链接，不替代真实模型、远端 sandbox、数据库或多 worker 的运行测试。条件性能力按正文中的配置、身份与生命周期前提理解。

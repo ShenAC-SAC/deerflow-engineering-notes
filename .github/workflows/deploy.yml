@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: bytedance/deer-flow
-          ref: d2cc991d55b05421885923c1791273daec270005
+          ref: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
           path: deer-flow
           fetch-depth: 0
 
@@ -35,6 +35,11 @@ jobs:
         uses: pnpm/action-setup@v6
         with:
           version: 10
+
+      - name: Setup Python for upstream symbol checks
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
 
       - name: Setup Node
         uses: actions/setup-node@v6

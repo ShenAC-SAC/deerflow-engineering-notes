@@ -31,8 +31,8 @@ export const JOURNEY: Station[] = [
     title: { zh: 'lead-agent 工厂', en: 'Lead-agent factory' },
     mentalModel: { zh: '把配置装配成可运行的 agent 图', en: 'Assemble config into a runnable agent graph' },
     teaser: {
-      zh: '图工厂把模型、工具、中间件、prompt 和状态结构装配成一张能运行的图；推理发生在后续的图执行阶段。',
-      en: 'The graph factory assembles model, tools, middleware, prompt, and state schema into a runnable graph; reasoning happens during graph execution.',
+      zh: '工厂返回 graph、最终模型与可选装配描述；配置、授权和 checkpoint 模式共同决定执行配方。',
+      en: 'The factory returns a graph, effective model, and optional descriptor; configuration, authorization, and checkpoint mode determine the recipe.',
     },
   },
   {
@@ -40,8 +40,8 @@ export const JOURNEY: Station[] = [
     title: { zh: '工具装配', en: 'Tool assembly' },
     mentalModel: { zh: '工具注册了，不代表这次 agent 就能用', en: 'Registered tools are not automatically available to this run' },
     teaser: {
-      zh: '工具注册完成后不会全部开放；一次 run 能动用哪些外部能力，要经过配置、模型、沙箱、skill 和 MCP 策略共同收敛。',
-      en: 'After tools are registered, config, model, sandbox, skills, and MCP policy still decide what this run may use.',
+      zh: '工具注册完成后不会全部开放；一次 run 能动用哪些外部能力，要经过配置、模型、沙箱、授权和 MCP 策略共同收敛。',
+      en: 'After tools are registered, config, model, sandbox, authorization, and MCP policy still decide what this run may use.',
     },
   },
   {
@@ -85,8 +85,8 @@ export const JOURNEY: Station[] = [
     title: { zh: '技能系统', en: 'Skill system' },
     mentalModel: { zh: '把经验沉淀成 agent 的系统能力', en: 'Turn experience into system-level agent capability' },
     teaser: {
-      zh: 'skill 用来补强 agent 系统能力：把流程、资料、脚本和权限边界打包成可复用单元。',
-      en: 'A skill strengthens the agent system by packaging workflows, references, scripts, and permission boundaries into reusable capability.',
+      zh: 'skill 用来补强 agent 系统能力：把流程、资料和脚本打包成可复用单元，并遵守 agent 的权限边界。',
+      en: 'A skill strengthens the agent system by packaging reusable workflows, references, and scripts within agent permission boundaries.',
     },
   },
   {

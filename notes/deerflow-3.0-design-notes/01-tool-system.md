@@ -1,237 +1,31 @@
-# DeerFlow 3.0 Design Notes: Tool System
+# 工具系统：保留的设计观察
 
-This note is maintained separately from the source-code reading tutorial. It records 3.0 design observations discovered while reading the DeerFlow 2.x Python implementation.
+核对基线：DeerFlow 2.2.0 开发快照 `51d59a1cdff92626bd9f03f1b2254f34a824ca3e`（2026-10-27）。
 
-## Current 2.x Shape
+本文件结合当前实现，记录需要进一步核实的设计问题。每个问题都说明已有机制与评估条件，不将候选方案视为运行行为或已确认缺陷。
 
-In 2.x, `get_available_tools()` builds the tool list for one agent run:
+## 当前机制
 
-```text
-config tools
-+ built-in tools
-+ subagent tools
-+ vision tools
-+ MCP tools
-+ ACP tools
--> sync/async compatibility wrapping
--> dedupe by tool.name
--> create_agent(tools=...)
-```
+工具权限由 agent 配置、装配期授权、执行期 Guardrail 与 middleware 声明工具检查共同约束。子 agent 按类型白名单、并发和总量策略执行。skill allowed-tools 是元数据，不参与工具授权。
 
-This works, but several responsibilities are mixed into one assembly function:
+## 仍值得研究：决策解释
 
-- tool discovery
-- config filtering
-- runtime capability gating
-- security policy
-- MCP cache access
-- subagent enablement
-- compatibility wrapping
-- duplicate-name conflict handling
+“为什么这个工具本轮不可见或不能执行”仍是有价值的调试问题。但当前已有装配描述、authorization decision、deferred catalog 和 receipts。先验证这些证据能否解释一个真实案例；只有确认缺口，才考虑为已有决策增加解释信息，不能直接再造一套 ToolPolicyResult。
 
-## Key 2.x Lessons
+## 仍值得研究：配置快照
 
-### Built-In Tools Are Not All The Same
+工具装配跨 AppConfig、MCP 连接与 extension generation。评估配置一致性时，先检查当前缓存、配置签名与 generation fence；只有出现它们无法覆盖的具体问题，才考虑增加工具目录快照。
 
-Some built-ins execute normal work:
+## 仍值得研究：Registry / Policy / Runtime
 
-```text
-present_files
--> validates file path
--> returns LangGraph Command
--> updates ThreadState.artifacts and messages
-```
+三种职责可作为阅读模型，不必对应三个新子系统。只有出现第二个实际消费者、独立替换需要或可复现的耦合问题，才有理由改变现有模块边界。
 
-Some built-ins are signal tools:
+## 核对入口
 
-```text
-ask_clarification
--> exposes a tool schema to the model
--> actual behavior is intercepted by ClarificationMiddleware
--> emits a ToolMessage and ends the current graph run
-```
+- [backend/packages/harness/deerflow/tools/tools.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/tools/tools.py)
+- [backend/packages/harness/deerflow/authz/tool_filter.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/authz/tool_filter.py)
+- [backend/packages/harness/deerflow/agents/middlewares/tool_declarations.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/agents/middlewares/tool_declarations.py)
+- [backend/packages/harness/deerflow/runtime/assembly_evidence.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/runtime/assembly_evidence.py)
+- [backend/packages/harness/deerflow/mcp/tools.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/mcp/tools.py)
 
-So "tool" currently means multiple things:
-
-- executable capability
-- user-interaction signal
-- state mutation command
-- delegation entry point
-- external integration wrapper
-
-3.0 should make these categories explicit.
-
-### Subagent Is A Capability, Not Just A Tool
-
-In 2.x, subagent access is enabled by appending `task_tool` when `subagent_enabled=True`.
-
-That is simple, but semantically weak:
-
-```text
-task_tool present in tool list == parent agent may delegate to subagents
-```
-
-For 3.0, subagent access should likely be modeled as an agent capability:
-
-```text
-AgentCapabilities {
-  subagents: enabled | disabled
-  allowedSubagents: string[]
-  nestingPolicy: none | limited | recursive
-}
-```
-
-Then tool exposure can be derived from policy, instead of using tool-list mutation as the source of truth.
-
-### MCP Cache Is Runtime Infrastructure
-
-In 2.x, MCP tools are cached globally after loading from enabled MCP servers. The cache avoids reconnecting and rebuilding tool objects for every agent run.
-
-The cache also watches extension config file mtime and resets when the config changes.
-
-This solves practical startup/runtime issues, but the config source is mixed:
-
-- `AppConfig` may be passed as a runtime snapshot.
-- `ExtensionsConfig.from_file()` is read directly inside tool assembly for hot updates.
-
-For 3.0, this should be made explicit:
-
-```text
-ToolCatalogSnapshot {
-  appConfigVersion
-  extensionsConfigVersion
-  tools
-  mcpServers
-  generatedAt
-}
-```
-
-The agent builder should consume a snapshot, not perform hidden file reads.
-
-## Proposed 3.0 Split
-
-### Tool Registry
-
-Owns what tools exist.
-
-```text
-ToolRegistry
--> built-in tools
--> sandbox tools
--> MCP tools
--> ACP tools
--> skill tools
-```
-
-It should answer:
-
-```text
-What capabilities are registered in the system?
-What is each tool's name, schema, provider, tags, and execution type?
-```
-
-### Tool Policy
-
-Owns what this run may use.
-
-```text
-ToolPolicy
--> model capability filtering
--> user/workspace permission filtering
--> custom agent tool group filtering
--> skill allowed_tools filtering
--> sandbox safety filtering
--> subagent nesting limits
-```
-
-It should answer:
-
-```text
-Which registered tools are exposed to this agent run?
-Why was a tool included or excluded?
-```
-
-In 2.x, this policy is already present but split across several places:
-
-```text
-tools.py
-  -> tool_groups
-  -> host bash safety
-  -> model supports_vision
-
-skills/tool_policy.py
-  -> skill allowed_tools
-
-task_tool.py
-  -> subagent_enabled=False for child agents
-  -> bash subagent safety
-
-tool_search / deferred middleware
-  -> MCP tools may require promotion before use
-```
-
-The important design lesson is that "tool policy" should not be a single list
-filter hidden in one module. It is a run-scoped decision system with multiple
-inputs:
-
-```text
-agent config
-skill config
-model capability
-sandbox mode
-user/workspace permission
-runtime mode
-external tool source
-```
-
-For 3.0, a first-class policy result would be useful:
-
-```text
-ToolPolicyResult {
-  exposedTools
-  deferredTools
-  deniedTools: Array<{ name, reason }>
-  warnings
-}
-```
-
-This would make debugging much easier than asking "why did this tool disappear
-from list[BaseTool]?"
-
-### Tool Runtime
-
-Owns how tools execute.
-
-```text
-ToolRuntime
--> async execution
--> timeout
--> cancellation
--> sandbox binding
--> user interaction interrupt
--> event streaming
--> audit logging
--> error normalization
-```
-
-It should answer:
-
-```text
-How does this tool call actually run?
-How are results, errors, interrupts, and state updates represented?
-```
-
-## Design Goal
-
-The 3.0 tool system should avoid using `list[BaseTool]` as the only source of truth.
-
-The better mental model:
-
-```text
-registered capabilities
--> policy-filtered exposed tools
--> runtime-executed tool calls
--> state/events/checkpoints
-```
-
-This keeps LangChain/LangGraph compatibility as an adapter layer, instead of letting framework tool objects define DeerFlow's core architecture.
+验证方式：固定提交的静态源码对照；未把真实模型、多 worker 或外部服务运行结果作为本笔记的已验证事实。

@@ -1,0 +1,103 @@
+---
+lang: en
+slug: extension-system
+title: "Extension system — how capabilities join a request"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
+sourceRefs:
+  - backend/packages/harness/deerflow/extensions/loader.py
+  - backend/packages/harness/deerflow/extensions/registry.py
+  - backend/packages/harness/deerflow/extensions/stack.py
+  - backend/packages/harness/deerflow/extensions/ordering.py
+  - backend/packages/harness/deerflow/extensions/isolation.py
+  - backend/packages/harness/deerflow/extensions/host_access.py
+  - backend/packages/extension-api/deerflow_extension_api/placement.py
+  - backend/packages/extension-api/deerflow_extension_api/plugins.py
+  - backend/packages/extension-api/deerflow_extension_api/run_evidence.py
+  - examples/deerflow-extension-retrieval/deerflow_extension_retrieval/__init__.py
+  - examples/deerflow-extension-bookmarks/deerflow_extension_bookmarks/__init__.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
+
+Suppose our report uses retrieval supplied outside the repository, or an extension observes model calls. How does that capability enter the request?
+
+DeerFlow declares extension contracts through `deerflow-extension-api`; the host loads and integrates them. This topic follows registration, assembly, and execution to show how an external module participates in a request.
+
+## Three distinct mechanisms
+
+| Mechanism | Supplies | Connection |
+| --- | --- | --- |
+| Skill | Methods, references, scripts | Discovery, activation, context |
+| MCP | Protocol-connected tools | Discovery, sessions, execution |
+| Python extension/plugin | Tools, middleware, lifecycle or product contributions | Startup, assembly, execution, Gateway |
+
+They can cooperate without sharing one permission or lifecycle model. A configuration filename containing “extensions” does not imply Python plugin loading.
+
+<FlowDiagram caption="Host lifecycle registers contributions; assembly and execution consume them."
+ chart={`flowchart TD
+ CFG["config.yaml plugins"] --> LOAD["Load install; check API version"]
+ LOAD --> REG["ExtensionRegistry"]
+ REG --> BUILD["Graph tools and middleware"]
+ REG --> HOST["Gateway services, actions, UI, capabilities"]
+ BUILD --> ORDER["Semantic placement → index → ordering checks"]
+ ORDER --> RUN["Shared model/tool execution path"]
+ RUN --> EVIDENCE["Scoped observations and evidence"]`} />
+
+## Loading is a deployment contract
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/loader.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ExtensionSpec" /> defines `use`, `config`, `enabled`, `required`, and host-access declarations. Configuration order determines loading; disabled entries are not imported. Compatibility uses an API version window, not merely a matching package name.
+
+Optional load failures can be diagnosed and skipped; required failures stop startup. Whether an extension may be absent is an explicit deployment decision.
+
+## Registering a retrieval extension
+
+<SourceRef file="examples/deerflow-extension-retrieval/deerflow_extension_retrieval/__init__.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> declares an installation entry through `@extension(...)`, then registers `PluginContribution` through `registry.plugin(...)`.
+
+Its `ModelTool` includes a name, description, JSON schema, and handler. `PluginToolResult` separates model-readable content from a structured artifact. This is an offline synthetic-data example, not a real company retrieval source.
+
+For our report, the reusable separation is:
+
+~~~text
+Input schema: queries the caller may submit
+Handler context: identity and scope supplied by the host
+Text content: material for the model
+Artifact: structured data for references and UI processing
+~~~
+
+A payload user ID is not authenticated host identity. <SourceRef file="examples/deerflow-extension-bookmarks/deerflow_extension_bookmarks/__init__.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> scopes data with `context.principal.user_id` and registers backend actions, model tools, and BrowserAssets separately. UI write actions need not all become model tools.
+
+## Semantic middleware placement
+
+<SourceRef file="backend/packages/extension-api/deerflow_extension_api/placement.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Placement" /> avoids hard-coded list indices:
+
+| Placement | Boundary |
+| --- | --- |
+| MODEL_LOGICAL | One logical decision outside retries |
+| MODEL_PHYSICAL | One provider call after request transforms; retries re-enter |
+| TOOL_VISIBLE | The result after truncation, sanitization, and error handling |
+| TOOL_RAW | The original result beside the real callable |
+| STANDARD | No special before/after-processing guarantee |
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/stack.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> maps these to the host chain. <SourceRef file="backend/packages/harness/deerflow/extensions/ordering.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="assert_ordering" /> checks invariants, including resolution before argument-sensitive policy and receipt coverage around short-circuiting guards.
+
+## Failure isolation is not a security sandbox
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/isolation.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="IsolatedMiddleware" /> contains observational-extension failures and tracks handler execution. A failure before invocation can pass through once; a failure afterward must reuse the captured result rather than repeat a model request or tool side effect.
+
+This is error isolation, **not process sandboxing for arbitrary third-party Python**. Observational fail-open behavior cannot substitute for authorization enforcement.
+
+## Host capabilities and evidence
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/host_access.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> governs explicit host access; <SourceRef file="backend/packages/extension-api/deerflow_extension_api/run_evidence.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> defines evidence contracts. Reading history, using host models, or mutating skills should use the relevant controlled capability rather than inspecting Gateway internals.
+
+Assembly descriptions record configuration; execution records capture actions and results. Completeness, retention, and authorization govern evidence access. Validating report conclusions still requires inspecting the cited content.
+
+<Philosophy>
+An extension interface supplies a useful entrance while preserving host decisions about loading, placement, identity, and failure. Independent packaging does not exempt a module from the main runtime's authority and lifecycle.
+</Philosophy>
+
+Return to <a href={link('/en/journey/2')}>assembly</a> and <a href={link('/en/journey/4')}>middleware</a> to see where these contributions are consumed.

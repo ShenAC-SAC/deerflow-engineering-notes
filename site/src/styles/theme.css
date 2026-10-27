@@ -191,9 +191,17 @@ td code { white-space: nowrap; }
 .site-header .spacer { flex: 1; }
 
 .lang-switch {
+  white-space: nowrap; flex-shrink: 0;
   font-family: var(--mono); font-size: .74rem; letter-spacing: .04em;
   border: 1px solid var(--line-2); border-radius: 7px; padding: 5px 11px;
   color: var(--ink-2); transition: border-color .15s, color .15s, background .15s;
+}
+
+@media (max-width: 560px) {
+  .brand-subtitle, .brand-sep { display: none; }
+  .site-header .bar { gap: 12px; }
+  .extension-nav { font-size: .85rem; white-space: nowrap; }
+  .prose table { display: block; max-width: 100%; overflow-x: auto; }
 }
 .lang-switch:hover {
   border-color: var(--signal); color: var(--signal);

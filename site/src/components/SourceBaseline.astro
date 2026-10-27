@@ -1,0 +1,16 @@
+---
+import source from '../data/source.json';
+interface Props { lang: 'zh' | 'en'; }
+const { lang } = Astro.props;
+const url = `https://github.com/bytedance/deer-flow/tree/${source.sha}`;
+---
+<p class="baseline">
+  {lang === 'zh'
+    ? `源码基线：DeerFlow ${source.version} 开发快照（${source.checkedAt}），尚非正式发布版。`
+    : `Source baseline: DeerFlow ${source.version} development snapshot (${source.checkedAt}), not a released version.`}
+  <a href={url} target="_blank" rel="noopener noreferrer">@{source.sha.slice(0, 8)}</a>
+</p>
+<style>
+  .baseline { color: var(--ink-faint); font-size: .84rem; line-height: 1.7; margin: 16px 0; }
+  .baseline a { white-space: nowrap; font-family: var(--mono); }
+</style>

@@ -53,13 +53,32 @@ boundaries introduced earlier.
 
 ## Source baseline
 
-All current articles are based on DeerFlow **v2.0.0** and pinned to the upstream
-release commit [`7e7f0410`](https://github.com/bytedance/deer-flow/commit/7e7f0410).
-The release version gives the human baseline; the commit SHA makes every source
-anchor reproducible. Each article carries that commit in frontmatter, and every
-source reference is checked against the pinned upstream code so the prose matches
-the implementation it explains. When DeerFlow moves again, outdated explanations
-should be revised first, then re-pinned.
+The current edition follows the **DeerFlow 2.2.0 development snapshot** checked
+on **2026-10-27**, pinned to [`51d59a1c`](https://github.com/bytedance/deer-flow/commit/51d59a1cdff92626bd9f03f1b2254f34a824ca3e).
+**2.2.0 was not yet released at that check.** Milestone proposals and open PRs
+are not treated as implemented behavior.
+
+The previous v2.0.0 edition is preserved by this notes repository's annotated
+tag **`deerflow-2.0.0`**, pointing to `3796442`. It is distinct from upstream's
+`v2.0.0` tag. Version metadata lives in `site/src/data/source.json`; article
+frontmatter, inline references, and the CI source checkout use the same SHA.
+
+One teaching request connects all nine stops: “Read the project materials,
+compare three implementation options, and produce a Markdown report with sources.”
+The route is a reading order, not a promise that every run invokes every module.
+
+## Extension topics
+
+A separate **Extension** section expands modules that cross the main journey:
+
+- **Extension system** — loading, tools, middleware placement, host capabilities, and evidence.
+- **Memory backends** — MemoryManager, automatic/tool modes, ownership, and failure behavior.
+- **Goals and scheduling** — goals, runs, durable occurrences, bounded continuation, and recovery.
+
+Both the nine-stop journey and all three topics have Chinese and English editions.
+“Extension” is the reading section's name; it does not imply that every topic is
+a Python plugin. Articles explain the pinned implementation directly. Design observations
+state their evidence and conditions separately from runtime behavior.
 
 ## Local preview
 
@@ -79,7 +98,7 @@ To verify the content, source anchors, build, and generated routes:
 
 ```bash
 cd site
-pnpm check
+DEERFLOW_ROOT=/path/to/deer-flow pnpm check
 ```
 
 ## Repository layout
@@ -93,9 +112,13 @@ Engineering_CLAUDE.md  engineering rules to drop into a project's CLAUDE.md befo
 
 ## Notes vs. site
 
-The `site/` directory is the public reading experience. The `notes/` directory is
-the working notebook behind it: source-reading notes, design observations, and
-rougher material kept so the polished tutorial can stay traceable.
+The `site/` directory is the canonical public reading experience. `notes/` keeps
+source-reading maps and design observations with explicit evidence and scope.
+
+Checks validate bilingual coverage, pinned files and Python definitions, the
+static build, and generated links. They do not prove prose semantics or real
+model/database/sandbox behavior. Source-symbol checks require Python 3.12+; set
+`PYTHON=/path/to/python3.12` when the default `python3` is older.
 
 ## Engineering CLAUDE.md
 

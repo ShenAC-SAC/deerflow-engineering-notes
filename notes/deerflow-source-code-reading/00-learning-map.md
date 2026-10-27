@@ -1,87 +1,44 @@
-# DeerFlow Source Code Reading Map
+# 从一句 prompt 到一次 Agent 运行
 
-This tutorial series is a source-code walkthrough for engineers who are new to large agent systems.
+基线：DeerFlow 2.2.0 开发快照（2026-10-27），`51d59a1cdff92626bd9f03f1b2254f34a824ca3e`。上游尚未正式发布 2.2.0。
 
-The goal is not to read every line. The goal is to build a durable mental model of how DeerFlow connects request handling, LangGraph execution, tools, middleware, sandboxing, subagents, skills, and persistence.
+## 贯穿案例
 
-## Reading Principles
+> 请阅读项目资料，比较三种实现方案，生成一份带来源的 Markdown 报告。
 
-For each module, read in this order:
+九站是阅读顺序，不是强制执行每个模块一次的固定流水线。Skills 在装配期参与发现，sandbox 可延迟创建，子 agent 只在适合委派时启动。
 
-1. Build the module mental model.
-2. Identify upstream callers and downstream dependencies.
-3. Trace the main runtime path.
-4. Read only the core functions.
-5. Record state/config changes and side effects.
-6. Capture design tradeoffs and risks.
-
-## Module Note Template
-
-Each module note should follow this structure:
-
-```text
-One-line mental model
-  Why this module exists.
-
-System position
-  Who calls it?
-  What does it call?
-
-Main flow
-  The 3-7 core steps in a real run.
-
-Core objects
-  Key functions/classes, limited to the important few.
-
-State and config
-  What AppConfig, RunnableConfig, Runtime.context, and ThreadState fields are read or written?
-
-Side effects
-  Files, database, network, model calls, sandbox, MCP, ACP, background tasks.
-
-Design tradeoffs
-  Why the design is shaped this way.
-
-Risks
-  Compatibility debt, security boundaries, confusing naming, ordering dependencies.
-
-Code reading focus
-  The exact source files and functions worth reading.
-```
-
-## Planned Route
-
-1. Request entry and agent main chain
-2. Lead agent factory
-3. Tools assembly
-4. Middleware pipeline
-5. Sandbox system (`05-sandbox-system.md`)
-6. Subagent system (`06-subagent-system.md`)
-7. Skills system (`07-skills-system.md`)
-8. Persistence, store, checkpointer, and run events (`08-persistence-store-checkpointer.md`)
-
-## Current Mental Model
-
-DeerFlow uses LangGraph as the agent execution kernel, but its primary application runtime is the DeerFlow Gateway. The Gateway accepts HTTP requests, manages threads/runs/streams/persistence, then builds and runs a LangGraph-backed agent graph through `make_lead_agent()`.
+1. 输入、上传与 Gateway run 准入。
+2. assemble_lead_agent：模型、能力、graph 与装配描述。
+3. 工具候选、授权、deferred 可见性和执行边界。
+4. middleware 准备上下文与模型请求视图。
+5. middleware 裁决输出、执行工具、保存凭据与收尾。
+6. sandbox 的路径、资源身份与 execution lease。
+7. 子 agent 的隔离上下文、预算与验收。
+8. skill 发现、激活、包扫描和文件投影。
+9. checkpoint、run、事件、流与文件的恢复边界。
 
 ```text
-Frontend / API
-  -> DeerFlow Gateway
-  -> RunManager / run_agent()
-  -> make_lead_agent(config)
-  -> _make_lead_agent(config, app_config)
-  -> create_agent(...)
-  -> agent.astream(...)
-  -> LangGraph runtime
+prompt → frontend → Gateway.start_run → RunManager
+       → run_agent → assemble_lead_agent → graph.astream
+       → middleware / model / tools / sandbox / optional subagent
+       → events + checkpoints + completion + artifact delivery
 ```
 
-`make_lead_agent()` is a compatibility adapter. `_make_lead_agent()` is the real lead-agent assembly function.
+## Extension 专题
 
-## Note Strategy
+主线保持九站；跨站能力单独讲解：
 
-Notes are written in two passes:
+- [扩展机制](../../site/src/content/extensions/zh/extension-system.mdx)：加载、声明式贡献、middleware placement、宿主能力与证据。
+- [记忆后端](../../site/src/content/extensions/zh/memory-backends.mdx)：MemoryManager、middleware/tool 模式、身份与关机边界。
+- [长期目标与调度](../../site/src/content/extensions/zh/goals-and-scheduling.mdx)：goal、run、task、occurrence 的不同生命周期。
 
-1. During module reading, keep a detailed working note while the code context is fresh.
-2. After the module is complete, compress it into a cleaner tutorial version.
+Extension 是站点阅读分区，不表示所有专题都必须作为 Python plugin 安装。
 
-This prevents important local details from being lost while still keeping the final tutorial readable.
+## 如何继续维护
+
+公开正文以 `site/src/content/` 为准；这里保存对应模块的阅读入口与语义核对点。
+版本元数据位于 `site/src/data/source.json`。每次升级先固定上游 SHA，再改写语义，最后同步 frontmatter 与行内源码引用。
+源码引用检查只确认引用与符号存在，不能自动验证正文结论。
+
+`deerflow-3.0-design-notes` 目录记录个人设计观察，分别说明当前机制、待核实问题与评估条件。运行行为以固定提交的源码和公开教程为准。

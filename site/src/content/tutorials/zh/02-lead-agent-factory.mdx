@@ -2,10 +2,15 @@
 lang: zh
 slug: 02-lead-agent-factory
 station: 2
-title: lead-agent 工厂 · 把配置装配成 agent 图
-sha: 7e7f0410
+title: "Lead-agent 工厂：装配图，也交代装配依据"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
 sourceRefs:
+  - backend/app/gateway/services.py
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  - backend/packages/harness/deerflow/agents/thread_state.py
+  - backend/packages/harness/deerflow/models/reasoning.py
+  - backend/packages/harness/deerflow/runtime/checkpoint_mode.py
   - backend/langgraph.json
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
@@ -13,117 +18,92 @@ import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
 
-上一章里，用户输入已经被 Gateway 登记成一次 run。现在它进入 `make_lead_agent()`：这一章看 DeerFlow 如何把「运行时选项 + 应用配置」装配成一张可运行的 LangGraph agent 图。
+报告请求已有 run 身份，现在要确定模型、工具、中间件和状态结构。**工厂负责装配，后面的图调用才执行推理。**
 
-先记住一件事，后面所有细节都围绕它展开：**这里负责把运行时选项和应用配置装配成 agent 图。** 推理发生在模型、工具和中间件的交互里；这个函数只负责把零件按规矩装好，然后把图交出去，自己不执行图。
+工厂向 Gateway 返回 `LeadAgentAssembly`，其中包含可执行图、最终模型和按需生成的装配描述。
 
-<FlowDiagram
-  caption="一次 run 怎么走到一张编译好的 agent 图"
-  chart={`flowchart TD
-  FE["前端 / API"] --> GW["DeerFlow Gateway · run_agent()"]
-  GW --> MK["make_lead_agent(config)"]
-  MK -->|"兼容适配：解析 AppConfig"| RC["_get_runtime_config(config)"]
-  RC --> MLA["_make_lead_agent(config, app_config=...)"]
-  MLA --> CA["create_agent(model, tools, middleware, prompt, ThreadState)"]
-  CA --> G["编译出的 LangGraph agent 图"]`}
-/>
+<FlowDiagram caption="两种宿主入口，复用同一个装配核心。"
+ chart={`flowchart TD
+ GW["Gateway resolve_agent_factory"] --> AS["assemble_lead_agent"]
+ LG["LangGraph Server make_lead_agent"] --> AS
+ AS --> MODE["解析配置，冻结 checkpoint 模式"]
+ MODE --> CORE["_assemble_lead_agent"]
+ CORE --> CAP["身份、模型、工具与授权"]
+ CAP --> MW["middleware 与 extensions"]
+ MW --> GRAPH["create_agent"]
+ GRAPH --> RESULT["LeadAgentAssembly"]
+ RESULT --> WORKER["Gateway 保留描述并执行 graph"]
+ RESULT --> ABI["make_lead_agent 只返回 graph"]`} />
 
-## 一个函数，两个名字
+## 入口与内部核心
 
-打开 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" />，你会看到一对名字很接近的函数：`make_lead_agent()` 和 `_make_lead_agent()`。那个下划线不是装饰，它划出了整篇最重要的一条边界。
+<SourceRef file="backend/app/gateway/services.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="resolve_agent_factory" /> 返回 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="assemble_lead_agent" />。各入口的职责如下：
 
-**`make_lead_agent(config)`** 只收一个参数，因为 LangGraph Server 要求图工厂必须能「只凭一个 config」被调起（见 <SourceRef file="backend/langgraph.json" sha="7e7f0410" />）。它的职责很薄：解析出 `AppConfig`（优先使用运行时注入的配置，回退到 `get_app_config()`），然后把装配工作交给下划线版本。它是**兼容适配器**。
+| 函数 | 返回值与用途 |
+| --- | --- |
+| `make_lead_agent(config)` | 返回 `assemble_lead_agent(config).graph`，保留 LangGraph Server 工厂签名 |
+| `assemble_lead_agent(config, *, app_config=None)` | 解析配置、冻结 checkpoint 模式，返回完整装配结果 |
+| `_assemble_lead_agent(config, *, app_config)` | 真正计算并创建 graph 的核心 |
+| `_make_lead_agent(config, *, app_config)` | 兼容 graph-only 调用方，不承担公开入口的模式冻结 |
 
-**`_make_lead_agent(config, *, app_config)`** 是实际的装配函数。那个 `*` 把 `app_config` 设成只能按关键字传——因为两个参数语义上都像 config，位置传参太容易搞混。它做的是确定性的事：从运行时选项 + 应用配置，一步步把图组装出来。
+<SourceRef file="backend/langgraph.json" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 为 LangGraph Server 登记 `make_lead_agent`；Gateway 使用 `assemble_lead_agent`，同时获取图与装配信息。
 
-<MarginNote>下划线在 Python 里没有任何强制力，只是一种约定。但这里它确实有讲究：外层函数处理兼容，内层函数负责装配。</MarginNote>
+## 先决定身份，再收窄能力
 
-## 运行选项是怎么拼出来的
+内部核心先解析有效用户身份，再读取该用户的自定义 agent 配置。客户端普通字段不能覆盖宿主认证保留字段。随后计算：
 
-`_get_runtime_config()` 把 `config["configurable"]` 和 `config["context"]` 合并。注意这里有明确的覆盖顺序：先铺 `configurable`，再让 `context` 覆盖同名键。
+- agent skills 与资源授权的交集；
+- 允许的子 agent 类型、并发和总量；
+- 是否允许交互式澄清、宿主是否提供调度能力；
+- 模型选择与工具授权。
 
-它读出的核心字段是**每次 run 的选项**，不是全局应用设置：
+例如 `allowed_subagents=[]` 禁止委派，客户端的 `subagent_enabled=true` 无法将它重新打开。调度能力由宿主在运行时提供，checkpoint 中的配置字段不能授予这项权限。
 
-```text
-model_name / model
-thinking_enabled
-reasoning_effort
-is_plan_mode
-subagent_enabled
-max_concurrent_subagents
-is_bootstrap
-agent_name
-```
+## 模型选择包括能力归一化
 
-## 模型怎么选
+常规选择从请求、agent 默认和全局配置解析模型，再应用授权。显式选择还要校验请求与标记一致且模型可用，不能把无权使用的显式模型静默解释成另一个模型。
 
-模型解析有明确的优先级：
+`thinking_enabled` 等选项区分“未传”与“显式 false”。<SourceRef file="backend/packages/harness/deerflow/models/reasoning.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="resolve_reasoning_request" /> 再按模型的 reasoning contract 处理：关闭不支持的 thinking、开启必需的 thinking，或将 effort 映射成 provider 的词汇。
 
-```text
-请求里的 model_name
-  > 自定义 agent 配置里的模型
-  > AppConfig.models[0]
-```
+因此，用户请求的设置与最终采用的设置可能不同。运行 metadata 和 `effective_model` 要描述实际执行情况。
 
-如果 `thinking_enabled=True`，但选中的模型并不支持 thinking，工厂会记一条 warning，然后把 `thinking_enabled` 关掉。想开启 thinking mode，也得看模型支不支持。
+<MarginNote>图内模型创建使用 `attach_tracing=False`，因为 tracing callback 在图调用根部绑定。重复绑定可能产生重复 span 并破坏用户、会话归因。</MarginNote>
 
-## 最终配方
+## 一次执行的装配步骤
 
-所有零件就位后，最终调用会收束成这样：
+常规分支依次完成：
 
-```python
-create_agent(
-    model=create_chat_model(...),
-    tools=filtered_tools,
-    middleware=build_middlewares(...),
-    system_prompt=apply_prompt_template(...),
-    state_schema=ThreadState,
-)
-```
+1. 获取候选工具，追加 skill discovery、memory、项目文档和任务连续性等本次可用工具。
+2. 应用工具授权，再构建 MCP deferred catalog。
+3. 组合 middleware 与 extensions，收窄并校验 middleware 声明的工具。
+4. 用同一组有效能力构造 prompt，避免提示词承诺不存在的工具。
+5. 选择 checkpoint 兼容的状态 schema，调用 `create_agent()`。
+6. 返回 `LeadAgentAssembly`。
 
-心智模型一句话：
+`bootstrap` 是用于创建自定义 agent 的窄能力分支。某些 webhook 来源也会禁用 agent 自修改工具，避免外部评论获得持久修改 agent 的能力。
 
-```text
-Lead Agent 图 = 模型 + 工具 + 中间件 + system_prompt + ThreadState
-```
+## 为什么状态 schema 参与装配
 
-`create_agent()` 提供标准的「模型 ↔ 工具」循环；DeerFlow 在这里负责备齐**材料**（模型、工具）和**运行约束**（中间件、prompt、状态结构）。
+<SourceRef file="backend/packages/harness/deerflow/runtime/checkpoint_mode.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="freeze_checkpoint_channel_mode" /> 将 `full` 或 `delta` 固定为进程级选择。<SourceRef file="backend/packages/harness/deerflow/agents/thread_state.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="get_thread_state_schema" /> 提供相应结构，middleware 状态 schema 也要保持一致。
+
+这不是随每个 prompt 切换的偏好。共享 checkpoint 数据库的进程必须兼容；改变模式需要重启，已有数据仍须经过兼容性检查。
+
+## 装配描述记录什么
+
+`LeadAgentAssembly` 有三个核心字段：
+
+| 字段 | 意义 |
+| --- | --- |
+| `graph` | 实际执行的图 |
+| `effective_model` | 最终使用的模型 |
+| `descriptor` | 按需生成的装配描述；没有对应证据消费者时可以为 None |
+
+描述符记录模型、工具、middleware 与有效策略，供扩展和审计使用。它描述执行配置，不承担任务结果的正确性验证，也不能替代可执行图。
 
 <Philosophy>
-
-为什么 `make_lead_agent` 要多这一层？因为它同时要兼容好几个宿主：官方 LangGraph Server / Studio、DeerFlow Gateway、嵌入式客户端、测试，还要兼容「老的 `configurable`」和「新的 `context`」两套约定。
-
-`app_config` 既能从运行时 config 里取，又能全局回退。这条绕路，是为了在**不破坏 LangGraph Server ABI** 的前提下，让 Gateway 注入一份热加载的配置快照。
-
-设计要点是：**兼容边界要显式、要单点。** 把所有兼容逻辑集中到一个命名清楚的适配函数里，让主体装配逻辑保持确定、清晰。这比让兼容逻辑散落在多处更容易维护。
-
+将 graph 与装配依据一起返回，使执行对象与解释它的数据共享边界。兼容宿主只取 graph，需要证据的宿主保留描述；各自的需求不必靠给 graph 随意挂属性实现。
 </Philosophy>
 
-<Tradeoff leftTitle="干净装配 · _make_lead_agent" rightTitle="兼容代价 · make_lead_agent">
-  <Fragment slot="left">
-
-  - 显式接收 `AppConfig`
-  - 从运行时选项**确定性**组装
-  - 更容易测试、推理
-
-  </Fragment>
-  <Fragment slot="right">
-
-  - 单参 ABI（LangGraph Server 要求）
-  - `app_config` 走 runtime config + 全局回退
-  - `cfg` 命名重载、`config` 被就地改写
-
-  </Fragment>
-</Tradeoff>
-
-## 易误解的要点
-
-- **`cfg` 是个重载名。** 它装着每次 run 的选项，也可能混进 `app_config`、`thread_id`、`run_id` 这类基础设施字段。看到 `cfg` 时，不要只按变量名判断它的语义。
-- **`config` 会被就地修改。** 工厂会写入 `metadata` 和 `callbacks`，不要把它当只读对象。
-- **bootstrap 和自定义 agent 容易混。** `setup_agent` 只在 bootstrap 流程出现；`update_agent` 只在已有自定义 agent 的对话里。如果混淆这两个场景，就会暴露错误的工具。
-- **中间件顺序在别处装配，却是最终行为的一部分。** 改这条装配线，可能无意中改了运行语义——这会在中间件章节展开。
-
----
-
-装配线的价值在于**确定性**：它按配置组装图，不在这里做推理，也不临时改变策略。下一章先看工具列表如何被筛出来；因为模型能调用什么，决定了这张图实际能做什么。
+下一站继续追问：候选工具如何变成模型可见、实际可执行的能力？扩展的接入契约另见 <a href={link('/zh/extensions/extension-system/')}>Extension 专题</a>。

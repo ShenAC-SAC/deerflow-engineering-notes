@@ -1,5 +1,6 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
+import ExtensionIndex from '../../components/ExtensionIndex.astro';
 import JourneyIndex from '../../components/JourneyIndex.astro';
 
 export function getStaticPaths() {
@@ -11,4 +12,5 @@ const title = lang === 'zh' ? 'DeerFlow 源码之旅' : 'DeerFlow Engineering No
 ---
 <BaseLayout title={title} lang={lang}>
   <JourneyIndex lang={lang} />
+  <ExtensionIndex lang={lang} />
 </BaseLayout>

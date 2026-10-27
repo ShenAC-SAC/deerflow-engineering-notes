@@ -2,11 +2,13 @@
 lang: en
 slug: 01-request-entry
 station: 1
-title: "Request entry: turning input into a managed run"
-sha: 7e7f0410
+title: "Request entry — turning a prompt into a managed run"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
 sourceRefs:
+  - frontend/src/core/threads/hooks.ts
   - backend/app/gateway/routers/thread_runs.py
   - backend/app/gateway/services.py
+  - backend/packages/harness/deerflow/runtime/runs/manager.py
   - backend/packages/harness/deerflow/runtime/runs/worker.py
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
@@ -14,101 +16,90 @@ import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
 
-Every agent system has an unglamorous job before graph execution starts: turn user input into a **run**. A prompt from the frontend needs an identity, a lifecycle, runtime context, and an event stream before it reaches the agent graph. This stop follows the DeerFlow Gateway as it accepts that prompt, records it as a run, installs context, and streams execution events back as they happen.
+A user sends one prompt:
 
-Keep one idea in view: **DeerFlow has to be a runtime before it can be an agent.** The Gateway is that runtime host. It owns intake, run status, cancellation, context injection, streaming, and completion. The actual reasoning starts later.
+> Read the project materials, compare three implementation options, and produce a Markdown report with sources.
 
-<FlowDiagram
-  caption="One prompt in: how it becomes a background run with a live stream"
-  chart={`flowchart TD
-  U["Frontend / IM / LangGraph SDK"] --> EP["POST /threads/{id}/runs/stream"]
-  EP --> SR["stream_run() · start_run()"]
-  SR --> RM["RunManager.create_or_reject()"]
-  RM --> CFG["build_run_config() · compat shim"]
-  CFG --> TASK["create_task(run_agent)"]
-  TASK -. background .-> RA["run_agent()"]
-  RA --> RT["Runtime(context=...)"]
-  RT --> MK["make_lead_agent(config)"]
-  MK --> ASM["agent.astream(...)"]
-  ASM --> SB["StreamBridge"]
-  SR --> SSE["sse_consumer() · SSE events"]
-  SB --> SSE`}
-/>
+The nine stops follow this request through reading, optional delegation, and report delivery. **The model chooses actions; the runtime supplies capabilities, constrains execution, and records results.** The chapters introduce concepts in reading order. During execution, skills participate in assembly, sandbox creation can be deferred, and delegation happens when needed.
 
-## Three runtime names, three different jobs
+First, we follow the text into a thread, a run, and an observable event stream.
 
-The easiest trap here is collapsing these names into one idea:
+<FlowDiagram caption="The Web path, omitting authorization and storage details. Gateway hosts execution."
+ chart={`flowchart TD
+ U["User prompt"] --> F["Frontend: uploads, thread.submit"]
+ F --> HTTP["POST /api/langgraph/threads/{id}/runs/stream"]
+ HTTP --> GW["Gateway: stream_run → start_run"]
+ GW --> ADM["Validate input and identity; prepare context"]
+ ADM --> RM["RunManager.create_or_reject"]
+ RM --> BG["Background run_agent"]
+ BG --> FACT["assemble_lead_agent → graph"]
+ FACT --> LOOP["agent.astream"]
+ LOOP --> BR["StreamBridge"]
+ GW --> SSE["sse_consumer"]
+ BR --> SSE
+ SSE --> UI["Text, tool progress, and artifacts"]`} />
 
-```text
-LangGraph         = the execution kernel agents use (how a graph runs)
-LangGraph Server  = the optional official HTTP runtime
-DeerFlow Gateway  = the current primary HTTP runtime, LangGraph-API compatible
-```
+## From the composer to HTTP
 
-`backend/langgraph.json` still registers `lead_agent`, which keeps the official LangGraph Server, Studio, and CLI path working. But **on the main path, the Gateway imports and calls the graph factory directly**. There is no official server in between. The usual product path is DeerFlow's own Gateway runtime, not LangGraph Server.
+Frontend <SourceRef file="frontend/src/core/threads/hooks.ts" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> uses the LangGraph SDK's `useStream`. The send handler uploads attachments, then calls `thread.submit()`: `messages` carries text and attachment information, `context` carries runtime preferences, and `threadId` identifies the conversation.
 
-<MarginNote>One line to keep them straight: LangGraph runs the graph; the Gateway turns a request into an observable, cancellable, rollback-ready run. Kernel vs. host.</MarginNote>
+This path enables `streamResumable` without `streamSubgraphs`. Delegated progress arrives through root-namespace custom events; a subgraph's complete `values` must not overwrite root conversation state.
 
-## The four parts that land a request
+The deployment proxy forwards `/api/langgraph/*` to Gateway's compatible routes. Using the SDK protocol **does not require an official LangGraph Server behind it**.
 
-Open <SourceRef file="backend/app/gateway/routers/thread_runs.py" sha="7e7f0410" /> and <SourceRef file="backend/app/gateway/services.py" sha="7e7f0410" /> and you'll keep meeting four roles. Don't memorize the fields — remember which question each one answers.
+| Object | Responsibility |
+| --- | --- |
+| thread | A conversation across turns |
+| run | One managed execution on that thread |
+| LangGraph | Graph execution and state updates |
+| Gateway | Admission, permissions, runs, streams, persistence, finalization |
+| LangGraph Server | An optional host, not an intermediary on this Web path |
 
-**`RunCreateRequest`** — the shape of a run request. It carries `input`, `command`, `config`, `context`, `metadata`, `stream_mode`, plus control bits like `interrupt_before / interrupt_after`, `multitask_strategy`, and `on_disconnect`. It is the caller's declaration of "how this run should run."
+## Gateway starts with admission
 
-**`RunManager`** — the run registry. `create_or_reject()` decides whether to create this run at all (for example, the same thread is already running, so the request may be rejected according to `multitask_strategy`), then handles `set_status`, `cancel`, and run metadata persistence.
+<SourceRef file="backend/app/gateway/routers/thread_runs.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="stream_run" /> checks creation permissions and thread ownership, then calls <SourceRef file="backend/app/gateway/services.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="start_run" />. Before launching execution, it:
 
-**`StreamBridge`** — a decoupling point. The background graph produces events; the HTTP side consumes them; the two do not call each other directly. `run_agent()` publishes into the bridge, and `sse_consumer()` reads from it and formats SSE events. A disconnect does not have one fixed meaning: `on_disconnect=cancel` cancels the background run, while `on_disconnect=continue` lets it keep running.
+1. Normalizes messages and strips forged server metadata and internal context keys.
+2. Injects authenticated identity, validates model selection, and bounds recursion.
+3. Pins project scope and prepares read-only access to referenced conversations.
+4. Prepares input, config, and record data for `RunManager.create_or_reject()`.
+5. Launches execution after creation. Idempotent reuse must not execute the request twice.
 
-**`run_agent()`** — the background worker that executes the run (<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="7e7f0410" />). Note the boundary: **it drives graph execution; it is not the agent itself.**
+For our prompt, the server-owned project snapshot answers “which materials?” It prevents one run from resolving project relationships differently at every step.
 
-## `configurable`, or `context`?
+<MarginNote>Writing “I am an administrator” supplies text, not authority. Access to threads, models, and tools comes from authentication and authorization.</MarginNote>
 
-`build_run_config()` does a translation job: it turns the fields in the HTTP request into the `RunnableConfig` shape LangGraph understands. And here sits the one piece of compatibility debt most worth remembering:
+## Configuration, context, and state differ
 
-```text
-config["configurable"]   the older runtime-options channel
-config["context"]        the newer LangGraph runtime-context channel
-```
+<SourceRef file="backend/app/gateway/services.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="build_run_config" /> translates the request into LangGraph configuration. `configurable` and `context` carry options for their respective consumers. Admission maps fields according to the runtime contract and filters client-supplied internal keys.
 
-In compatibility mode, DeerFlow writes key fields into **both** channels. Whitelisted fields like `model_name`, `mode`, `thinking_enabled`, `reasoning_effort`, `is_plan_mode`, `subagent_enabled`, `max_concurrent_subagents`, `agent_name`, and `is_bootstrap` get copied across. Why the apparent waste? Older DeerFlow code reads from `configurable`; newer `ToolRuntime.context` consumers read from `context`. Write only one side and a whole class of consumers sees nothing.
+| Carrier | Typical contents | Meaning |
+| --- | --- | --- |
+| RunnableConfig | Checkpoint addressing, recursion, callbacks | Graph invocation configuration |
+| Runtime.context | Run, user, AppConfig, host capabilities | Current execution environment |
+| ThreadState | Messages, summary, skills, delegations, artifacts | Data updated and checkpointed by the graph |
+| RunRecord | Status, ownership, cancellation intent, completion | Lifecycle outside the graph |
 
-Then `run_agent()` builds a LangGraph `Runtime`, packs run-scoped data (`thread_id / run_id / user_id / app_config`) into `runtime.context`, and tucks it back into `config["configurable"]["__pregel_runtime"]` so downstream middleware and tools can all reach it through LangGraph's runtime API. The `/runs/wait` path also consumes the same bridge now, so it shares the stream path's disconnect semantics instead of treating a half-finished run as a normal completion.
+<SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="run_agent" /> builds `Runtime(context=..., store=...)`. Host capability objects and secrets belong to execution context and must remain separate from persisted state and metadata.
 
-<Philosophy title="Design rationale">
+## One execution chain, three waiting modes
 
-Why does the Gateway reimplement a LangGraph-compatible API instead of just using the official LangGraph Server?
+Background creation returns a record immediately; `/runs/stream` returns SSE; `/runs/wait` waits for completion. They share admission and lifecycle logic.
 
-That lets DeerFlow own the application-level concerns: auth, thread/run metadata, the run event store, the SSE bridge, rollback, frontend compatibility, hot-reload boundaries, and its own persistence. These are product runtime concerns, beyond graph execution itself.
+The bridge separates production from HTTP consumption. `on_disconnect=continue` permits execution to continue; `cancel` requests cancellation through ownership and finalization rules. Joining an existing stream observes a run without creating another or automatically inheriting the creator's disconnect policy.
 
-The cost is a layer of compatibility glue: request fields must be translated into LangGraph-flavored config, stream modes mapped, runtime context installed by hand. The lesson rhymes with the next stop — **funnel the compatibility awkwardness into the entry layer, and let the graph execution below stay clean.** Kernel runs; host absorbs the compatibility.
+`Content-Location` identifies the canonical run resource. An in-memory bridge is process-local: a durable record from another worker does not imply an available local stream. The route rejects this unsupported subscription instead of waiting on an empty log.
 
+## A lifecycle exists before reasoning
+
+<SourceRef file="backend/packages/harness/deerflow/runtime/runs/manager.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="RunManager" /> handles admission, state, ownership, and cancellation. <SourceRef file="backend/packages/harness/deerflow/runtime/runs/worker.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="run_agent" /> invokes the graph, publishes events, and finalizes. Neither is the model.
+
+With heartbeat enabled, remote cancellation can persist an intent for the owner to observe. Expired-run recovery must also check ownership. Single-process mode has different boundaries, developed at stop nine.
+
+<Philosophy>
+Gateway turns model interaction into manageable application execution. The cost is maintaining boundaries between the SDK protocol, graph state, and business records. Identify who accepts, owns, observes, and terminates the request.
 </Philosophy>
 
-<Tradeoff leftTitle="Own the host · Gateway" rightTitle="Cost · compat glue">
-  <Fragment slot="left">
-
-  - owns auth / metadata / rollback / persistence
-  - one intake for frontend, IM, and SDK hosts
-  - full control over a run's lifecycle
-
-  </Fragment>
-  <Fragment slot="right">
-
-  - fields must be translated into LangGraph config
-  - `configurable` / `context` dual-write, historical debt
-  - `run_agent()` carries too much in one function
-
-  </Fragment>
-</Tradeoff>
-
-## Where it will trip you up
-
-- **`configurable` and `context` are historical compatibility debt.** A field written to only one side may read empty for old code or for newer `ToolRuntime.context` consumers. Adding a field? First decide which whitelist it belongs to and whether it needs the dual-write.
-- **`run_agent()` does too much in one place.** It mixes graph invocation, persistence, stream publishing, rollback, tracing, and cleanup in a single path — powerful, but heavy. Know which part you're touching before you touch it.
-- **It runs as a background task.** Disconnect, cancellation, rollback, and final checkpoint serialization all need care, or you may return "half-finished state" as success.
-- **It doesn't mutate `ThreadState` directly.** Run records, thread metadata, and stream events are written by the Gateway; the agent's graph state is written by graph execution. When state changes, first identify which layer wrote it.
-
----
-
-The entry layer turns user input into a running graph, streams it back, and then gets out of the way. It has caught the request, filed the run, and installed context. Next, the run reaches `make_lead_agent()`, where the request stops being intake data and becomes a runnable graph.
+Our prompt is now an admitted run. Next, its factory assembles the executable graph.

@@ -1,0 +1,103 @@
+---
+lang: zh
+slug: extension-system
+title: "扩展机制：能力怎样接入一次请求"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
+sourceRefs:
+  - backend/packages/harness/deerflow/extensions/loader.py
+  - backend/packages/harness/deerflow/extensions/registry.py
+  - backend/packages/harness/deerflow/extensions/stack.py
+  - backend/packages/harness/deerflow/extensions/ordering.py
+  - backend/packages/harness/deerflow/extensions/isolation.py
+  - backend/packages/harness/deerflow/extensions/host_access.py
+  - backend/packages/extension-api/deerflow_extension_api/placement.py
+  - backend/packages/extension-api/deerflow_extension_api/plugins.py
+  - backend/packages/extension-api/deerflow_extension_api/run_evidence.py
+  - examples/deerflow-extension-retrieval/deerflow_extension_retrieval/__init__.py
+  - examples/deerflow-extension-bookmarks/deerflow_extension_bookmarks/__init__.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
+
+回到主线的报告请求：如果资料来自一个仓库外的检索模块，或者希望在模型调用旁记录观察数据，这些能力怎样进入执行链？
+
+DeerFlow 通过 `deerflow-extension-api` 声明扩展契约，由宿主负责加载和接入。本篇沿着注册、装配与执行三步，解释仓库外模块怎样参与一次请求。
+
+## 先分清三种“扩展”
+
+| 机制 | 主要提供什么 | 主线接入位置 |
+| --- | --- | --- |
+| Skill | 方法、参考资料、脚本包 | 发现、激活与上下文 |
+| MCP | 协议连接的外部工具 | 工具发现、会话与执行 |
+| Python extension / plugin | 工具、middleware、生命周期或完整产品入口等声明 | 启动、图装配、执行与 Gateway |
+
+它们可以协作，却不是同一个权限与生命周期接口。名字里带 extension 的配置文件，也不代表都走 Python plugin loader。
+
+## 从启用到一次请求
+
+<FlowDiagram caption="扩展在宿主生命周期中注册能力，在请求装配和执行时被消费。"
+ chart={`flowchart TD
+ CFG["config.yaml plugins"] --> LOAD["loader：导入 install，检查 API 版本"]
+ LOAD --> REG["ExtensionRegistry：注册贡献"]
+ REG --> BUILD["图装配：工具与 middleware"]
+ REG --> HOST["Gateway：服务、路由、UI 与宿主能力"]
+ BUILD --> ORDER["语义 placement → 具体位置 → 顺序校验"]
+ ORDER --> RUN["同一套模型和工具执行链"]
+ RUN --> EVIDENCE["有边界的运行观察与证据"]`} />
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/loader.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ExtensionSpec" /> 描述 `use`、`config`、`enabled`、`required` 和宿主访问声明。启用顺序来自配置列表；禁用项不应被导入。API 兼容检查也有版本窗口，不能只比较包名相同。
+
+可选扩展加载失败可以形成诊断并跳过；标记 required 的扩展失败会阻止启动。`required` 因而决定了扩展故障是否影响整个服务启动。
+
+## 检索扩展的注册与返回值
+
+检索示例 <SourceRef file="examples/deerflow-extension-retrieval/deerflow_extension_retrieval/__init__.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 通过 `@extension(...)` 声明安装入口，在 `install(registry, config)` 中调用 `registry.plugin(PluginContribution(...))`。
+
+它注册一个 `ModelTool`，包含名称、描述、JSON schema 和 handler。handler 返回 `PluginToolResult`，将模型可读文本与结构化 artifact 分开。这是一个只读、离线、虚构数据示例，不是真实公司的资料源。
+
+对报告任务来说，可迁移的设计是：
+
+~~~text
+工具参数 schema：用户/模型可以提出什么查询
+handler context：宿主给出的实际身份与作用域
+文本结果：供模型阅读
+artifact：供结构化处理、引用与界面消费
+~~~
+
+不能把用户在 payload 中传入的 user_id 当成宿主认证身份。书签示例 <SourceRef file="examples/deerflow-extension-bookmarks/deerflow_extension_bookmarks/__init__.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 使用 `context.principal.user_id` 隔离数据，并分别注册 backend action、模型工具和 BrowserAssets：界面能执行的写操作，不必全部暴露给模型。
+
+## Middleware 通过语义位置接入
+
+<SourceRef file="backend/packages/extension-api/deerflow_extension_api/placement.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Placement" /> 避免插件硬编码“插到第七个 middleware 后面”：
+
+| placement | 想观察的边界 |
+| --- | --- |
+| MODEL_LOGICAL | 外于重试的一次逻辑模型决策 |
+| MODEL_PHYSICAL | 经过请求变换后的一次实际 provider 调用；重试会再次进入 |
+| TOOL_VISIBLE | 经过截断、净化、错误包装后，模型看见的工具结果 |
+| TOOL_RAW | 紧邻真实工具调用的原始返回 |
+| STANDARD | 没有特定前后处理保证的位置 |
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/stack.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 将语义位置映射到宿主链，<SourceRef file="backend/packages/harness/deerflow/extensions/ordering.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="assert_ordering" /> 检查关键不变量。例如 artifact handle 要先解析，参数策略才能检查真实引用；receipt 必须覆盖可以提前拒绝的策略。
+
+## 异常隔离不是权限隔离
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/isolation.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="IsolatedMiddleware" /> 为观察型扩展隔离故障，并跟踪 downstream handler 是否已经调用。handler 之前扩展出错，可以继续调用一次；handler 已完成后扩展出错，应复用已经得到的结果，不能再发一次模型请求或重复工具副作用。
+
+这是错误处理边界，**不是对任意第三方 Python 代码的进程沙箱**。也不能拿观察型的 fail-open 行为代替真正授权策略的拒绝语义。
+
+## 宿主能力与运行证据
+
+<SourceRef file="backend/packages/harness/deerflow/extensions/host_access.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 管理显式宿主访问声明；<SourceRef file="backend/packages/extension-api/deerflow_extension_api/run_evidence.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 提供运行证据契约。扩展需要读取历史、调用宿主模型或修改 skill 时，应使用对应受控能力，而不是直接翻 Gateway 私有对象与文件目录。
+
+装配描述记录配置，运行记录呈现动作与结果。证据可读范围由完整性、保留策略和授权决定；报告结论是否成立，还需要核对引用的实际内容。
+
+<Philosophy>
+好的扩展接口给模块一个可用的入口，也给宿主留下决定权：何时加载、在哪观察、以谁的身份访问、失败时怎样处理。模块能独立发布，并不意味着它应绕开主线的授权和生命周期。
+</Philosophy>
+
+回到 <a href={link('/zh/journey/2')}>第二站的装配</a> 与 <a href={link('/zh/journey/4')}>第四站的 middleware</a>，就能找到这些贡献被实际消费的位置。

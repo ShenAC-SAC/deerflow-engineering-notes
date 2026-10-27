@@ -2,153 +2,115 @@
 lang: en
 slug: 03-tools-assembly
 station: 3
-title: "Tool assembly: which tools this run may use"
-sha: 7e7f0410
+title: "Tool assembly: candidates, visibility, and execution"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
 sourceRefs:
   - backend/packages/harness/deerflow/tools/tools.py
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
-  - backend/packages/harness/deerflow/mcp/tools.py
-  - backend/packages/harness/deerflow/skills/tool_policy.py
+  - backend/packages/harness/deerflow/authz/tool_filter.py
+  - backend/packages/harness/deerflow/agents/middlewares/tool_declarations.py
   - backend/packages/harness/deerflow/tools/builtins/tool_search.py
+  - backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py
+  - backend/packages/harness/deerflow/mcp/tools.py
+  - backend/packages/harness/deerflow/guardrails/middleware.py
+  - backend/packages/harness/deerflow/skills/types.py
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
 import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
 
-Most readers meet the tools module and think: "this is where functions get registered." That is only half true. The useful question appears when a tool you clearly configured **does not appear in front of the model**: what external capabilities is this agent allowed to use in this run?
+Comparing options may require file reads, search, delegation, and a final report write. These capabilities pass through assembly and authorization. **The tool system decides which candidates exist, which schemas are visible, and whether a particular call may execute.**
 
-Hold onto this: **a registered tool is not automatically available to this run.** Config, built-ins, model capability, sandbox rules, skills, MCP, and subagent policy all decide which tools the agent may use, which tools are removed, and which schemas are *deferred*. Only after that policy pass do you get the final list handed to `create_agent(..., tools=...)`.
+<FlowDiagram caption="Capability narrowing on the main path. Middleware-declared tools also undergo authorization."
+ chart={`flowchart TD
+ SRC["Config / built-ins / MCP / ACP / extensions"] --> GET["get_available_tools"]
+ GET --> FILTER["Agent groups, model, sandbox, host capability"]
+ FILTER --> EXTRA["Append describe_skill / memory / project tools"]
+ EXTRA --> AUTH["apply_tool_authorization"]
+ AUTH --> DEF["assemble_deferred_tools"]
+ DEF --> GRAPH["Tools supplied to graph"]
+ GRAPH --> VIEW["Middleware selects visible schemas"]
+ VIEW --> CALL["Model proposes tool call"]
+ CALL --> CHECK["Execution authorization and policy"]
+ CHECK --> EXEC["Execute or return a denial"]`} />
 
-<FlowDiagram
-  caption="From tool sources to what this run is allowed to see: a two-stage assembly"
-  chart={`flowchart TD
-  SRC["config.yaml · built-ins · MCP · ACP"] --> GA["get_available_tools()"]
-  GA --> G1["tool_groups filter"]
-  G1 --> G2["host bash safety gate"]
-  G2 --> G3["model capability · vision"]
-  G3 --> DD["dedupe by tool.name"]
-  DD --> SK["skill allowed_tools filter"]
-  SK --> DF["assemble_deferred_tools · defer MCP"]
-  DF --> CA["create_agent(tools=final_tools)"]`}
-/>
+## Where candidates come from
 
-## A candidate set, not the final set
+<SourceRef file="backend/packages/harness/deerflow/tools/tools.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="get_available_tools" /> builds candidates from configuration, built-ins, and integrations. Configured tools use a `module.path:variable_name` reference. Agent `tool_groups`, vision support, host-bash policy, and live host capabilities narrow the set.
 
-The main entry is `get_available_tools()` in <SourceRef file="backend/packages/harness/deerflow/tools/tools.py" sha="7e7f0410" />. But note the boundary: **what it produces is not the final tool list. It is a candidate set.** It answers a deliberately limited question:
+A configuration `name` labels an entry; `BaseTool.name` identifies the model schema and execution route. Deduplication uses the actual tool name, making source order relevant for collisions.
 
-```text
-Given system config, built-ins, and runtime switches,
-which tools can this agent candidate acquire?
-```
+MCP and ACP supply external capabilities. Extension tools also participate in host assembly and policy; they are not exempt entry points.
 
-The flow is roughly: start from `AppConfig.tools` → filter by a custom agent's `tool_groups` → drop host bash if it is not allowed → dynamically import via `resolve_variable(cfg.use, BaseTool)` → add built-ins → add `task_tool` by switch and `view_image_tool` by model capability → attach MCP / ACP → and finally **dedupe by `tool.name`**.
+## Authorization covers every tool source
 
-Then, back in `_make_lead_agent()` (<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" />), the candidate set passes through two more gates: the skill-level `allowed_tools` filter and the MCP deferred-tool assembly. Visibility is **two-stage**: gather candidates, then apply policy.
+The factory appends tools such as `describe_skill`, memory, and project-document access. These also pass through <SourceRef file="backend/packages/harness/deerflow/authz/tool_filter.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="apply_tool_authorization" />, preventing late additions from bypassing the initial filter.
 
-## Config is not the tool itself
+Middleware may declare tools too, such as a task-list tool. <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_declarations.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="narrow_declared_tools" /> and subsequent verification include these declarations in the same permission boundary. Inspecting only `create_agent(tools=...)` is insufficient.
 
-A tool in `config.yaml` looks like this:
+<SourceRef file="backend/packages/harness/deerflow/guardrails/middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="GuardrailMiddleware" /> performs execution-time checks. Assembly asks whether a tool is offered; execution asks whether this particular invocation is allowed. A denial must become an understandable result, not a claim that execution occurred.
 
-```yaml
-tools:
-  - name: read_file
-    group: file:read
-    use: deerflow.sandbox.tools:read_file_tool
-```
+## Skill metadata and tool authorization
 
-That `use` field is a DeerFlow convention, not Python syntax: `module.path:variable_name`. `resolve_variable()` hands the part before the colon to `import_module()`, pulls the variable after the colon from that module, and checks that it is a `BaseTool` instance.
+`SKILL.md` stores `allowed-tools` as compatibility metadata. The field does not participate in agent tool filtering or execution authorization.
 
-This produces a **key distinction** worth remembering:
+<SourceRef file="backend/packages/harness/deerflow/skills/types.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="Skill" /> stores the field. Agent configuration, authorization providers, and runtime policies determine tool permissions; skill visibility and activation use a separate resource-authorization path.
 
-```text
-the name in config  =  a label for humans reading config
-tool.name           =  the name exposed to the model and used for routing
-```
+Inspect assembly results and execution policy to determine which tools a run may use. The value of `allowed-tools` does not change that scope.
 
-Routing looks at `BaseTool.name`, which need not equal the `name` written in `config.yaml`. The moment they diverge, the model sees one schema name while the runtime routes by another — and DeerFlow logs a warning about exactly that.
+## Deferred tools: registered before their schemas are exposed
 
-<MarginNote>Dynamic import is flexible; the price is late failure. A wrong module path, a wrong variable name, a missing optional dependency, or a variable that is not a BaseTool all fail at runtime resolution.</MarginNote>
+With `tool_search.enabled`, <SourceRef file="backend/packages/harness/deerflow/tools/builtins/tool_search.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="assemble_deferred_tools" /> builds a catalog of MCP tools. The model gets a smaller discovery surface and promotes the schemas it needs through `tool_search`.
 
-## Visibility is several gates, not one whitelist
+~~~text
+Registration and authorization
+  → deferred catalog + catalog_hash
+  → tool_search discovery
+  → promoted state update
+  → schema exposed on a later model call
+  → promotion and authorization checked at execution
+~~~
 
-"Why is this tool missing?" is hard to chase because visibility crosses several gates, each with its key in a different file:
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="DeferredToolFilterMiddleware" /> controls schema visibility and blocks unpromoted calls. Promotion is scoped by catalog hash, preventing an old promotion from automatically authorizing a changed tool with the same name.
 
-- **`tool_groups`** — a custom agent's coarse whitelist. Set it, and only tools in those groups survive.
-- **host bash safety gate** — even if `config.yaml` declares `bash`, it must pass `is_host_bash_allowed(config)` first; if not, it's dropped. This is a **security boundary**, not an ordinary toggle.
-- **model capability** — `view_image_tool` is appended only when the selected model declares `supports_vision`.
-- **skill policy** — `filter_tools_by_skill_allowed_tools()` in <SourceRef file="backend/packages/harness/deerflow/skills/tool_policy.py" sha="7e7f0410" />: with no skill declaring `allowed_tools`, it stays allow-all; the moment a skill declares one, only the names in that set survive. This is least-privilege landing on the toolset.
+MCP routing can also auto-promote schemas when configured. It assists discovery without bypassing authorization. Skills have an independent `skills.deferred_discovery` switch, covered at stop eight.
 
-## A tool is not one shape
+## Tool calls have different consequences
 
-The second trap in reading the tools module is assuming every tool is "just a function call." DeerFlow tools come in at least four shapes — recognize them and several later stops get easier:
+| Kind | Example | Effect |
+| --- | --- | --- |
+| Read or execute | File read, search, shell | Supplies model input and may cause external side effects |
+| State update | `present_files` | Returns a Command updating artifact state for the UI |
+| Control flow | `ask_clarification` | Middleware changes how the run continues |
+| Delegation | `task` | Starts a child agent and returns results and associated evidence |
+| Discovery | `tool_search`, `describe_skill` | Changes available information without granting higher authority |
 
-- **Plain execution tool** — a `BaseTool` made by `@tool`; the model emits a `tool_call`, and ToolNode runs the function. `read_file`, `web_search`, and `bash` are examples.
-- **State-updating tool** — `present_files` doesn't just return text; it returns a LangGraph `Command(update={"artifacts": ...})` that **writes graph state directly**, and the frontend renders the artifacts from there.
-- **Control-flow tool** — `ask_clarification`'s function body is only a placeholder; the behavior lives in `ClarificationMiddleware`, which intercepts the call and uses `Command(..., goto=END)` to halt the run until the user's next message. **Treat user input as an interrupt, not as a tool that sits there blocking on a human.**
-- **Delegation tool** — `task` is the subagent entry: it inherits the parent's sandbox/model/tool policy, builds the child toolset with `subagent_enabled=False` (so `task` isn't recursively exposed), runs a `SubagentExecutor` in the background, and returns the result as a tool result.
+For our prompt, the model might read first and search after discovering missing evidence, or ask which three options to compare. Input and runtime policy govern these branches, not registration order.
 
-<MarginNote>Notice the design smell here: whether a parent agent "can delegate" shows up as whether task_tool is in the list. Capability is coupled to list mutation. The subagent chapter separates those ideas.</MarginNote>
+## MCP also owns session and file integration
 
-## The tool exists; its schema may not be exposed
+<SourceRef file="backend/packages/harness/deerflow/mcp/tools.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> wraps sessions, calls, and results as well as schemas. The scope of a stdio session, its workspace and temporary files, and virtual-path mapping determine how outputs return to the current thread.
 
-MCP tools are the clearest proof that a tool can sit in the list and still be invisible to the model. With `tool_search.enabled` on, MCP tools **do not** dump full schemas onto the model at once. The prompt lists only names, and the model calls `tool_search` for the schema when it needs one. The reason is pragmatic:
+Being able to invoke a browser tool does not establish that the user can download its screenshot. Delivery also requires paths, artifact metadata, ownership, and persistence. Durable MCP tasks are likewise distinct from a tool call that simply waits forever.
 
-```text
-A single MCP server can expose dozens of tools.
-Binding every schema = bigger prompt, higher cost, noisier tool selection.
-```
-
-This path crosses several layers — a textbook case of DeerFlow spreading one feature across modules (<SourceRef file="backend/packages/harness/deerflow/tools/builtins/tool_search.py" sha="7e7f0410" />):
-
-```text
-get_available_tools  ->  tag_mcp_tool(t)
-assemble_deferred_tools  ->  build catalog + tool_search, return DeferredToolSetup
-apply_prompt_template  ->  prompt lists deferred tool names only
-model calls tool_search  ->  returns matching schemas + writes state.promoted
-DeferredToolFilterMiddleware  ->  unpromoted schemas hidden; a raw call returns an error
-```
-
-The reducer for `ThreadState.promoted` scopes by `catalog_hash`: same hash unions the promoted names, a changed hash replaces them — so a stale same-named promotion can't release a *different* tool after MCP config changes.
-
-MCP also has a runtime adaptation layer (<SourceRef file="backend/packages/harness/deerflow/mcp/tools.py" sha="7e7f0410" symbol="_make_session_pool_tool" />). Stdio MCP servers reuse a session scoped by `user_id + thread_id`, and their process `cwd` plus temp directory are pinned under the thread workspace. When a tool such as Playwright produces screenshots or trace files, DeerFlow can rewrite local file references back into `/mnt/user-data/...` virtual paths. MCP is therefore not only about deferred schemas; it also has to reconnect external tool outputs to the sandbox path model.
-
-<Philosophy title="Design rationale">
-
-The thing to walk away with is this deliberate **two-stage** split:
-
-`get_available_tools()` answers "which tools can this run's candidate see"; `filter_tools_by_skill_allowed_tools()` answers "after skills load, which are still allowed." Separating *tool sources* from *tool policy* lets visibility be controlled by **both** agent-level config and skill-level least-privilege — without the two rules fighting.
-
-One level up: **tool visibility is the result of a policy computation, not a static registry.** Next time you debug "the tool is missing," the question isn't "does the function exist," it's "at which gate, by which policy, and for what reason was it dropped." That's also the motivation behind 3.0 wanting to split `ToolRegistry / ToolPolicy / ToolRuntime` — registration, policy, and execution were always three different questions.
-
-</Philosophy>
-
-<Tradeoff leftTitle="What dynamic assembly buys" rightTitle="The cost">
+<Tradeoff leftTitle="Expose schemas on demand" rightTitle="Contracts to maintain">
   <Fragment slot="left">
 
-  - pluggable sources: config / built-ins / MCP / ACP, all alike
-  - visibility computed per run — tunable by model, sandbox, skill
-  - deferral keeps a flood of MCP tools from bursting the prompt
+  - Reduce model-context cost for large catalogs.
+  - Match capabilities to the agent, user, and host.
+  - Keep capability sources separate from authorization.
 
   </Fragment>
   <Fragment slot="right">
 
-  - dynamic import fails late (only at runtime)
-  - one feature spread across metadata/assembly/prompt/state/middleware
-  - `tool.name` may diverge from the config name
+  - Discovery, promotion, authorization, and execution must agree.
+  - Name collisions and catalog changes need deterministic semantics.
+  - External sessions and files need ownership too.
 
   </Fragment>
 </Tradeoff>
 
-## Where it will trip you up
-
-- **`config name` is not `tool.name`.** Routing uses `BaseTool.name`. When they diverge, the name the model sees and the name the runtime routes by drift apart.
-- **host bash is a security boundary, not a toggle.** Declared doesn't mean allowed — it must pass `is_host_bash_allowed(config)`.
-- **MCP is not only about schemas.** Deferred tools keep schemas out of the model request; stdio session scoping, cwd/temp pinning, and path rewriting keep generated files inside the thread workspace.
-- **"Visible" is not "executable."** A deferred MCP tool is still held by ToolNode and can run after promotion; only its schema is withheld from the model. Call it before promotion and middleware rejects the call.
-- **Dedupe has priority.** The order is config → built-ins → MCP → ACP, and on a name clash **the earlier one wins**. Because routing is by name, duplicates make the schema ambiguous.
-
----
-
-The tool-assembly stop answers "which tools is this run **allowed to see or call**," not "how a given tool **runs**." Keep those questions apart and the whole tool system becomes easier to follow. Once the tools are gathered and the graph is assembled, the next behavior-setting variable appears: **middleware order.** Next stop, we watch order turn into runtime semantics.
+Tools are assembled. Next, middleware turns the conversation into model-ready input.

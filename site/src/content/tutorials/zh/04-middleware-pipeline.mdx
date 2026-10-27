@@ -2,584 +2,109 @@
 lang: zh
 slug: 04-middleware-pipeline
 station: 4
-title: 中间件管线（上）：模型调用前的运行时准备
-sha: 7e7f0410
+title: "中间件管线（上）：把对话准备成模型输入"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
 sourceRefs:
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
   - backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/uploads_middleware.py
-  - backend/packages/harness/deerflow/sandbox/middleware.py
   - backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/durable_context_middleware.py
   - backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/todo_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/view_image_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/tool_output_budget_middleware.py
   - backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/loop_detection_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py
-  - backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/input_sanitization_middleware.py
+  - backend/packages/harness/deerflow/agents/thread_state.py
+  - backend/packages/harness/deerflow/extensions/ordering.py
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
 import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
-import Design30 from '../../../components/Design30.astro';
+import { link } from '../../../utils/link';
 
-第一次点开 `build_middlewares()`，它看起来并不起眼——只是把一串对象依次 append 进一个 list。但这个 list 的排布，实际上决定了后面一整次 run 的运行时行为：用户的 prompt 会先经过一组 middleware，再进入模型调用。它们负责准备 thread 的文件路径、处理上传附件、建立 sandbox 的生命周期、注入日期和 memory、修补 provider 要求的消息协议。等到模型调用开始时，request 已经被整理成 DeerFlow 期望的样子。
+模型和工具选好后，middleware 负责准备模型输入。对于报告请求，这包括消息历史、项目资料范围、上传文件和当前时间；对话较长时还需要压缩上下文。处理这些内容的同时，middleware 也维护工具调用与结果的消息协议。
 
-上一站我们看了工具是怎么被收集和暴露出去的。这一站继续沿 run 生命周期往下看：**一次 run 在模型调用前会经过哪些 middleware，哪些状态和协议边界会在这里建立。** 模型返回之后的那一半——`after_model`、`wrap_tool_call`、`after_agent` 如何按逆序处理结果——留给下一站。
+**读 middleware 时，先问它挂在哪个 hook、读写哪种状态，再问它在列表中的位置。** 同一个对象可能同时参与模型调用和工具执行。
 
-<FlowDiagram
-  caption="向内半程：run 进入后，依次经过 before_agent、before_model、wrap_model_call，最终抵达模型调用。"
-  chart={`flowchart TD
-  RUN["run 进入"] --> BA["before_agent · 整个 run 只跑一次"]
-  BA --> BM["before_model · 每轮模型调用前"]
-  BM --> WMC["wrap_model_call · 包住模型调用"]
-  WMC --> MODEL["model call"]
-  MODEL -.->|"返回结果向外走 → 下一站"| OUT["after_model / wrap_tool_call / after_agent"]`}
-/>
+<FlowDiagram caption="每轮模型调用的教学简图。具体 hook 由装配与配置决定。"
+ chart={`flowchart TD
+ START["进入 agent"] --> BA["before_agent：thread、uploads、sandbox 生命周期"]
+ BA --> BM["before_model：协议修补、捕获 durable context、按需压缩"]
+ BM --> WR["wrap_model_call：输入净化、动态上下文、schema 过滤"]
+ WR --> MODEL["模型调用"]
+ MODEL --> AFTER["after_model"]
+ AFTER --> BRANCH{"继续方式"}
+ BRANCH -->|工具调用| TOOL["wrap_tool_call → tools"]
+ TOOL --> BM
+ BRANCH -->|最终响应或停止| END["after_agent 与 worker 收尾"]`} />
 
-## 一个 list，两段拼出来
+## 共享基座与 lead 专属层
 
-装配入口是 <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" symbol="build_middlewares" />。逻辑上分两步：先取一段 lead 和 subagent 共用的 runtime 基座，再往上叠 lead agent 专属的 middleware。
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="build_lead_runtime_middlewares" /> 提供共享运行基座，<SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="build_middlewares" /> 再增加 lead 专属处理，最后合并 extension 贡献。
 
-共享基座来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py" sha="7e7f0410" symbol="build_lead_runtime_middlewares" />：
+阅读时可以先按职责分组。下表是**职责索引，不是可以直接拿去重排的完整执行顺序**：
 
-```text
-共享基座（lead 与 subagent 复用）
-  ToolOutputBudget    大工具输出落盘，消息里只留预览和路径
-  ThreadData          计算 thread_data 路径，给 workspace/uploads/outputs 定位
-  Uploads             把上传文件信息呈现给模型（只有 lead 有）
-  Sandbox             管理 sandbox 生命周期和 sandbox_id 持久化
-  DanglingToolCall    修补历史里悬空的工具调用协议
-  LLMErrorHandling    模型调用失败时重试、熔断、兜底
-  Guardrail?          可选运行时授权（配置了 provider 才有）
-  SandboxAudit        bash command 的 pass/warn/block 闸门
-  ToolErrorHandling   工具异常转成 ToolMessage(status="error")
-```
+| 处理组 | 代表机制 | 本次请求需要它解决什么 |
+| --- | --- | --- |
+| 不可信输入 | InputSanitization、ToolResultSanitization、可选 PII redaction | 用户文字、网页、工具输出不能伪装成框架权限 |
+| 资源与范围 | ThreadData、Uploads、Sandbox、KnowledgeScope | 文件在哪里，这次允许使用哪一批资料 |
+| 协议与模型边界 | DanglingToolCall、LLMErrorHandling、SystemMessageCoalescing | 历史工具消息成对，模型请求符合 provider 接口 |
+| 动态上下文 | DynamicContext、SkillActivation、DurableContext | 加入日期、记忆、skill 和压缩后仍需保留的信息 |
+| 上下文预算 | ToolOutputBudget、可选 Summarization | 大结果和长历史不会无限占据请求 |
+| 模型可见能力 | MCP routing、DeferredToolFilter | 本轮该暴露哪些 schema |
+| 输出与运行控制 | receipts、audit、subagent limit、loop、token budget、clarification | 模型回来以后如何执行或停止，下一站展开 |
 
-然后 `build_middlewares()` 继续追加 lead 专属段：
+这些处理按配置组合。例如 `memory_enabled=false` 会关闭该 agent 的记忆使用路径，日期上下文则独立保留。
 
-```text
-lead 专属段（带 ? 的按条件装配）
-  DynamicContext      注入日期和记忆，不动 system prompt
-  SkillActivation     用户用 /skill 时，把完整 SKILL.md 注入本轮 request
-  Summarization?      历史太长时压缩旧消息
-  TodoList?           plan mode 的任务清单和完成提醒
-  TokenUsage?         记录 token usage，给动作做产品语义归因
-  Title               第一轮完整对话后生成标题
-  Memory              run 结束后把对话送入 memory queue
-  ViewImage?          视觉模型可用时，把已查看图片呈现给模型
-  DeferredToolFilter? 隐藏未 promoted 的 deferred tool schema，拦截非法调用
-  SubagentLimit?      限制并行 task/subagent 数量
-  LoopDetection?      检测并打断重复工具调用循环
-  SafetyFinishReason? provider safety stop 后清空不可信 tool_calls
-  Clarification       把 ask_clarification 变成 run 级暂停，始终最后注册
-```
+## 顺序规则要按 hook 理解
 
-两张表里带 `?` 的项，意思是它**不一定出现在每次 run 里**。`build_middlewares()` 装配它们时外面包了一个 `if`：条件成立才 append 进链，不成立就根本不进这次 run 的列表。条件来自运行时配置和模型能力——`Summarization?` 看有没有开摘要，`TodoList?` 看是不是 plan mode，`ViewImage?` 看当前模型支不支持视觉，`DeferredToolFilter?` 看有没有开 tool_search。不带 `?` 的（DynamicContext、Title、Memory、Clarification……）则每次必装。
+~~~text
+注册顺序：A, B, C
 
-这里有两件事值得在往下读之前说清楚。
+before_*：A → B → C
+after_* ：C → B → A
+wrap_*  ：A 包住 B，B 包住 C，返回时向外展开
+~~~
 
-**第一，顺序本身就是运行时契约。** `build_middlewares()` 上方的注释并非可有可无——它描述的是源码无法用类型系统表达、但真实存在的数据依赖：`ThreadData` 先算出 workspace / uploads / outputs 路径，`Uploads` 要用其中的 uploads 路径去扫文件、`Sandbox` 的挂载也要用这套路径，所以两者都必须排在 `ThreadData` 之后；而 `Clarification` 要能在工具执行前把 `ask_clarification` 拦成 run 级暂停，就必须守在工具边界的最里侧，所以总是最后注册。改顺序就是改行为，而且不会有任何编译期检查提醒你改错了。
+这是 hook 自身的组合规律，不是说所有 middleware 都挂了所有 hook，也不是把 `wrap_tool_call` 当成 `after_model` 的普通逆序回调。工具包装围绕实际工具执行，模型包装围绕模型调用。
 
-**第二，注册顺序不等于每个 hook 的执行顺序。** 同一个 middleware 可能挂多个 hook，而不同 hook 的派发方向不一样——有的正序，有的逆序。这一点是后面所有内容的地基，下一小节详细解释。
+<SourceRef file="backend/packages/harness/deerflow/extensions/ordering.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="assert_ordering" /> 在 extension 组合完成后校验已声明的顺序约束。未纳入约束的依赖关系，需要结合 hook 实现与行为测试检查。
 
-<MarginNote>同一份代码，不同 run 挂的链可能不一样。plan mode、vision model、tool_search、subagent 开关、guardrail 配置——都会影响最终装配出来的 middleware 列表。</MarginNote>
+## before_agent：准备目录与执行资源
 
-## 怎么理解注册顺序和执行顺序？
+ThreadData 建立 thread 目录信息，Uploads 读取本轮上传上下文，Sandbox 管理执行资源。lazy 初始化通常将创建延迟到实际使用；受限 skill projection 与启用的 prewarm 则可能提前获取环境。
 
-这是整章最容易混淆的部分，先记住一句话：
+对于报告请求，上传完成只是有了文件；模型还需要知道文件的虚拟路径和用途。项目文档也可能通过索引与按需检索提供，不等于把整个项目全部塞入 prompt。
 
-> **先注册的 middleware，位于调用链更外层。**
+## before_model：把必须留下的信息从 messages 分离
 
-一个 middleware 可以同时挂好几个 hook（`before_model`、`after_model`、`wrap_model_call`……）。它们共用同一份注册顺序，但**派发方向不一样**。用调用链的包裹关系理解会更清晰：
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/durable_context_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="DurableContextMiddleware" /> 从消息中提取当前委派记录与已加载 skill，更新独立状态通道。<SourceRef file="backend/packages/harness/deerflow/agents/thread_state.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="ThreadState" /> 中还包括 `summary_text`、`tool_artifacts`、`task_notes` 等。
 
-```text
-请求进入模型调用前       → 先注册的先执行
-模型返回结果向外处理时   → 后注册的先执行
-```
+这些通道使“已经研究过什么、读过哪个 skill、得到什么产物”不必完全依赖一大段旧消息。委派按 run 与调用身份关联，不能把其他 run 中同名 provider tool-call ID 当作同一执行。
 
-落到三类 hook 上，其实是同一条规则的三个切面：
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 在启用且达到触发条件时压缩历史，保留继续执行所需的近期消息与协议边界。压缩不是把所有证据变成可靠结论：摘要、task notes 和子 agent 报告仍可能失真，需要通过原始来源重新核验。
 
-```text
-before_*（调用前）        正序：先注册的先执行
-after_* （返回后）        逆序：后注册的先执行
-wrap_*  （调用前后都管）  先注册的把后注册的包在里面
-```
+## wrap_model_call：构造请求视图
 
-举个最小的例子。注册顺序是 `A`（在上）、`B`（在下），两个都挂了 `before_model` 和 `after_model`：
+这里必须区分两种写法：
 
-```text
-before_model（请求进来）:   A ──▶ B ──▶ 模型
-after_model （回答出去）:   模型 ──▶ B ──▶ A
-```
+| 操作 | 是否改变持久化图状态 |
+| --- | --- |
+| hook 返回 state update，经 reducer 合并 | 会改变图状态，是否耐久取决于 checkpointer |
+| `request.override(messages=...)` | 构造本次模型请求视图，不自动改写 checkpoint |
 
-A、B 的先后**整个反过来了**：进来时 A 先，出去时 B 先。所以光看 list 里「A 在 B 上面」，根本推不出"A 一定先执行"——必须先问是哪个 hook。
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 将变化频繁的日期和可用记忆放在动态上下文中，尽量保持基础 system prompt 稳定。<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/durable_context_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="DurableContextMiddleware" /> 则临时加入权限说明与隐藏的数据消息，呈现摘要、委派、skills、产物和启用的任务连续性信息。
 
-`wrap_model_call` 把"进"和"出"压进同一个函数，还是用A、B举例子：
+这些消息保留明确的权限层级：active goal 表达用户设定的目标，按用户请求处理；摘要、委派报告等历史字段按数据处理，不获得系统指令权限。
 
-```text
-进入 →  A 拿到 request，改一改，调 handler
-          └─ B 拿到 request，改一改，调 handler
-                └─ 调用模型，拿到 response
-          ┌─ B 先处理 response
-返回 ←  A 后处理 response
-```
+## 一处修补，可能影响多个 provider
 
-A 是外皮：**最先**碰到请求、**最后**碰到回答；B 在里层：最后碰到请求、最先碰到回答。
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> 处理悬空 tool call。净化、压缩、故障回退和历史裁剪都可能改变消息，必须一起维护“调用与结果成对”的契约。
 
-下一站会讲的 `SafetyFinishReasonMiddleware` 故意注册得**靠后**（靠里），它的注释写明：就是为了在 `after_model` 的逆序派发里**最先**跑，赶在循环检测、子 agent 计数之前，把 provider 安全截断后不可信的 `tool_calls` 清掉。注册靠里 → 出去时先执行。
+SystemMessageCoalescing 在请求边界合并 system 内容；ModelContentCompatibility 处理特定内容形式。它们解决的是发送给 provider 的请求兼容性，不意味着更改用户看到的历史记录。
 
-所以这一章按 run 的生命周期讲：请求先经过 `before_agent` → `before_model` → `wrap_model_call`，再抵达模型调用；模型返回后的处理放到下一站。这样的阅读顺序，和运行时实际执行顺序一致。
-
-## middleware 的产物写到哪里？
-
-顺序之外，读 middleware 还要盯住第二条线：**每个 middleware 的产物，到底写到哪里。** 后面你会反复看到两种说法——「写回 graph state」和「只改这次 request、不写 state」——先把它们的分界立住，后面就不用每次重新判断。
-
-graph state（也就是 `ThreadState`）是一块**被 checkpoint 持久化、跨轮存活、所有 middleware 和工具共享**的黑板。一个东西要不要写进去，就问三件事：
-
-```text
-要跨轮 / 跨 resume 活下来吗？      会被 checkpoint 存下、恢复时还原
-要被别的 middleware 或工具看到吗？  state 是大家共享的黑板
-要按字段的 reducer 规则合并吗？     多次更新怎么 merge
-```
-
-三个都不需要，就不该写进 state——它会去下面三个地方之一：
-
-```text
-只改这一次 model request  →  turn-local，下一轮就没了（如 skill 正文、各种 reminder）
-留在 middleware 实例内存里 →  进程级运行时控制（如循环计数、熔断状态）
-派发去外部                  →  副作用（如 memory queue、审计日志、SSE 事件）
-```
-
-一个关键判断：**该不该进 state，看的是"暂停后是否还要继续使用、或者别的 middleware 是否还要读取"，而不是"它重不重要"。** 一条转瞬即逝的循环警告也很重要，但它绝不该被 checkpoint 存下来、resume 时再还原回来。按照这个标准，每个 middleware 写不写 state，你都能自己判断。
-
-## 这一篇覆盖的三类 hook
-
-下面这张表是后面几节的导航——每个 middleware 都会放到对应阶段展开：
-
-| Hook | 时机 | 一次 run 跑几次 | 本章涉及 |
-| --- | --- | --- | --- |
-| `before_agent` | 进入 agent graph 时 | 1 次 | ThreadData、Uploads、Sandbox、DynamicContext、Todo、LoopDetection |
-| `before_model` | 每轮 model call 前 | 每轮 | Summarization、Todo、ViewImage |
-| `wrap_model_call` | 包住一次 model call | 每轮 | ToolOutputBudget、DanglingToolCall、LLMErrorHandling、LoopDetection、SkillActivation、Todo、DeferredToolFilter |
-
-剩下三类要到模型返回之后才执行，是下一站的内容：
-
-```text
-after_model
-wrap_tool_call
-after_agent
-```
-
-下面就从 run 的第一个阶段 `before_agent` 开始，走向内的半程。
-
-## before_agent：run 的开场
-
-`before_agent` 在进入 agent graph 的时候跑一次。它负责 run 级别的准备工作：确定路径、呈现上传文件、建立 sandbox 生命周期、注入日期与 memory，或者清理上一轮 run 的残留状态。
-
-这一层的完整清单：
-
-```text
-ThreadData
-Uploads
-Sandbox
-DynamicContext
-Todo(before_agent cleanup, plan mode only)
-LoopDetection(before_agent reset, if enabled)
-```
-
-**ThreadData** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py" sha="7e7f0410" symbol="ThreadDataMiddleware" />。它根据 `thread_id` 和可选的 `user_id` 计算出：
-
-```text
-workspace_path
-uploads_path
-outputs_path
-```
-
-默认 `lazy_init=True` 的时候，它主要是**计算并写入路径**，不一定立刻创建目录。只有 `lazy_init=False` 时才会 eager create。也就是说，`ThreadDataMiddleware` 不是"文件系统工具"——它更像是给后面的 middleware 和工具提供一套坐标：这个 thread 的文件该往哪里放。
-
-它还会给最后一条用户消息补上 `run_id` 和 timestamp，方便前端或 runtime 识别这一轮输入。这个动作也透露了一个容易忽略的点：middleware 可以在 run 一开场就改写消息对象，不一定要等到 model call 前才动手。
-
-**Uploads** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/uploads_middleware.py" sha="7e7f0410" symbol="UploadsMiddleware" />。它不负责"上传文件"这个动作——文件已经由前端或 gateway 放进了 thread 的 uploads 目录。它的职责是扫描当前消息里附带的新文件、加上目录里已有的历史文件，生成一段 `<uploaded_files>` 上下文，prepend 到最后一条 `HumanMessage` 前面。
-
-这一步只有 lead agent 装配。subagent 不装 `UploadsMiddleware`，因为 subagent 继承的是执行上下文，不需要重新处理用户的上传入口。
-
-这里还埋了一个后面很多 middleware 都会用到的设计模式：
-
-```text
-真实文件:
-  留在 thread uploads 目录
-
-模型看到的内容:
-  文件名、大小、虚拟路径、outline/preview
-
-前端需要的结构化信息:
-  保留在 message.additional_kwargs
-```
-
-也就是说，Uploads 只告诉模型"有哪些文件、放在哪里、是什么类型、大致内容是什么"，不会把文件内容整段塞进 prompt。模型如果确实需要完整内容，后面再通过文件工具去读。
-
-**Sandbox** 来自 <SourceRef file="backend/packages/harness/deerflow/sandbox/middleware.py" sha="7e7f0410" symbol="SandboxMiddleware" />。它默认是`lazy_init=True`。也就是说，`before_agent` 阶段通常不会马上 acquire 一个 sandbox；acquire 发生在第一次 sandbox tool 调用时。
-
-这层的职责是建立 sandbox 的生命周期和状态契约。
-
-```text
-state["sandbox"] 里保存 sandbox_id
-sandbox provider 管理 sandbox 实例
-after_agent 负责 release
-wrap_tool_call 负责把工具执行中新产生的 sandbox_id 持久化回 graph state
-```
-
-先记住一个分工：
-
-```text
-ThreadData → 文件路径属于哪个 thread
-Sandbox    → 工具命令在哪个执行环境里跑
-```
-
-具体的 local / container / Kubernetes / AIO sandbox 的隔离边界，放到后面的 sandbox 章节再展开。这里有一个关键区分：
-
-```text
-sandbox_id:
-  写进 graph state 的资源身份
-
-Sandbox instance:
-  provider 持有的真实执行对象
-```
-
-工具里通过 `runtime.state["sandbox"]` 只能拿到类似 `{"sandbox_id": "..."}` 的状态；能执行命令、读写文件的是 provider 根据这个 id 找回来的 sandbox 实例。
-
-**DynamicContext** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="7e7f0410" />。它把日期和记忆注入为隐藏的 `HumanMessage`，而不是去改 system prompt。
-
-不改 system prompt 的原因：prefix cache。模型供应商会把一段稳定 prompt 前缀的计算结果缓存下来，下次遇到同样的前缀直接复用，省时也省钱；可前缀只要变一个字，这份缓存就作废，得从头重算。日期、memory 这种每轮都可能变的动态内容，要是塞进 system prompt，就会不断击穿这层缓存——所以它们只能走 message stream（放进消息列表里），让 system prompt 一直保持不变。
-
-那怎么把一条 reminder 插到用户问题**前面**，同时保持用户原文不变？DynamicContext 用的是 **ID-swap（ID 互换）**。先补一个前提：LangGraph 的消息 reducer 有条规则——新消息的 id 和已有消息相同，就**原地替换**那一条；id 不同，才**追加**。DynamicContext 借这条规则，把 reminder 的 id 设成原用户消息的 id，再把原始用户文本挪到一个派生 id `{原id}__user` 上：
-
-```text
-注入前：
-  [id = X]         用户的问题
-
-注入后：
-  [id = X]         隐藏的 system-reminder（复用原 id → 顶替掉原消息的位置）
-  [id = X__user]   用户的问题（换成派生 id，紧跟在 reminder 后面）
-```
-
-于是三件事一次做到：reminder 排到了用户问题前面、用户原文一字未改（只换了 id）、而且这条 reminder 带着 `hide_from_ui` 标记，前端不会把它当成用户消息显示。
-
-它还有一个可靠性设计：异步路径会把可能阻塞的 memory 构建放进 `asyncio.to_thread()`，再用 5 秒超时兜底。这样即便 memory 变慢，也不会拖住整个 run。
-
-注入策略不是"每轮都塞一条"：
-
-```text
-first turn:
-  在第一条真实用户消息前注入 date + memory
-
-same day:
-  不重复注入
-
-date changed:
-  在最新真实用户消息前补一条 date-only reminder
-```
-
-这里有两个语义层要分清楚：
-
-```text
-content envelope:
-  <system-reminder>...</system-reminder>
-  给模型读的，帮模型理解这不是用户的普通正文
-
-additional_kwargs:
-  hide_from_ui / dynamic_context_reminder 等标记
-  给前端和 middleware 读的，用来隐藏、识别、去重
-```
-
-所以"模型可见"和"前端可见"不是一回事。DynamicContext 的 reminder 模型能看到，但通过 metadata 告诉前端不要把它当成用户消息展示。
-
-<Design30>
-日期和记忆不是同一个可靠性等级。日期是廉价的本地事实，memory 可能涉及存储、分词和冷启动 IO。现在它们共用一个超时边界；3.0 可以把两者拆开，让 memory 超时不影响日期注入。
-</Design30>
-
-**Todo** 和 **LoopDetection** 在 `before_agent` 里只负责"清场"。先补一个容易忽略的前提：**middleware 实例是长期存活、被同一进程里多个 run 复用的**，不会每个 run 新建一份。所以它们可能保留上一轮 run 的临时簿记——Todo 那边攒着一份"别让模型在任务没做完时就收尾"的提醒，LoopDetection 那边攒着一份重复调用的计数。这些都不该进入新的 run，于是两者在开场各自清零：Todo 清掉遗留的提醒，LoopDetection 重置循环检测状态。
-
-这两套机制留到后面（`before_model`、`wrap_model_call`）再展开。这里它们做的只是每个 run 开场的清理；少了这一步，run 之间就会互相污染。
-
-## before_model：每轮模型调用之前
-
-`before_model` 每次 model call 前都会跑。它适合做两件事：
-
-```text
-1. 控制上下文预算
-2. 把模型本轮应该看到的内容补进 messages
-```
-
-这一层的完整清单：
-
-```text
-Summarization
-Todo(before_model reminder, plan mode only)
-ViewImage
-```
-
-**Summarization** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py" sha="7e7f0410" />。历史太长的时候，它会整段替换 messages，而不是简单截断：
-
-```python
-{
-    "messages": [
-        RemoveMessage(id=REMOVE_ALL_MESSAGES),
-        *new_messages,       # 一条 name="summary" 的摘要
-        *preserved_messages, # 保留的近段
-    ]
-}
-```
-
-`RemoveMessage(REMOVE_ALL_MESSAGES)` 是"把现有消息全部清掉"，后面紧跟着新生成的摘要和保留的原文——所以这是一次**整体替换**，不是在末尾追加。
-
-摘要本身是 `HumanMessage(name="summary")`。用 `HumanMessage` 是为了让模型把它当背景来读；`name="summary"` 是让 runtime 和 middleware 知道它不是用户的真实输入——这样后面的 middleware 才不会把摘要当成用户 prompt 去解析 slash command 或者注入上下文。
-
-DeerFlow 在此基础上做了一个结构化的保留策略：如果待压缩区里有最近读取 `/mnt/skills` 的 tool result，会把相关的 AIMessage/ToolMessage bundle 从待压缩区救回 preserved 区。原因是 skill 内容通常是精确的执行指令，压成散文会丢掉路径、约束和格式。
-
-但这种救回不是无限的，它有预算：
-
-```text
-preserve_recent_skill_count:
-  最多救回几个最近的 skill bundle
-
-preserve_recent_skill_tokens:
-  救回内容的总 token budget
-
-preserve_recent_skill_tokens_per_skill:
-  单个 skill 的 token cap
-```
-
-这就避免了大量旧 skill 内容被一次性全部救回、把 summarization 的预算击穿。背后的设计判断是：「最近读进来的 skill 文件，多半还是当前要照着做的指令」。因此它只把待压缩区里最近、且在预算内的几次 /mnt/skills 读取原样留住，其余照常压缩。
-
-<Design30>
-summarization 在这里更接近"选择性丢弃"，不是通用压缩。普通聊天可以摘要；仍在生效的指令、schema、工具结果和约束更接近执行上下文。3.0 可以先抽取 typed context items，再按保留价值决定原文保留、摘要、外置或长期记忆。
-</Design30>
-
-**Todo** 在 `before_model` 里负责补另一类上下文：如果 todo state 还在，但当初的 `write_todos` 调用已经被 summarization 或窗口裁剪移出了当前消息，它会注入一条隐藏 reminder，提醒模型当前还有 active todo list。
-
-这里的本质是：`state["todos"]` 还在，但模型能看见的消息历史里已经找不到 todo 是怎么来的了。runtime 知道任务没做完，但模型可能认为可以收尾了。TodoMiddleware 做的事，就是把"运行时还记得、但消息窗口里已经丢失"的任务状态，重新变成模型能看到的 reminder。
-
-它和 DynamicContext 的区别：
-
-```text
-DynamicContext:
-  补当前日期 / 记忆这类外部上下文
-
-Todo before_model:
-  补 graph state 里还活着、但消息窗口里已经丢失的任务上下文
-```
-
-**ViewImage** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/view_image_middleware.py" sha="7e7f0410" />，只有模型支持 vision 时才会装配。它把模型已经通过 `view_image` 工具读过的图片，转成 provider-compatible 的 multimodal message，让后续 model call 接收到图片内容，而不是只看到一条"工具执行成功"。
-
-这里要和工具本身分开理解：
-
-```text
-view_image tool:
-  读取图片，把图片信息写进 state["viewed_images"]
-  返回 ToolMessage("Successfully read image")
-
-ViewImageMiddleware:
-  在 before_model 阶段读取 state["viewed_images"]
-  构造 provider-compatible multimodal HumanMessage
-```
-
-也就是说，工具执行完成只代表 runtime 拿到了图片数据；模型下一轮能不能"看见"这些图片，还要靠 middleware 把图片注入 model request。
-
-<Design30>
-ViewImage 暴露了一个通用问题：不要把"最后一条 HumanMessage"直接等同于"最后一次用户输入"。消息列表里可能掺杂了 dynamic context、todo reminder、summary、image projection 等 runtime 注入的消息。3.0 需要给 runtime-injected messages 更明确的 provenance（来源、用途、幂等键），不要靠提示词文字来承担控制元数据的职责。
-</Design30>
-
-## wrap_model_call：包住模型调用
-
-`wrap_model_call` 是最接近 model provider 的向内层。它拿到一个 `handler`，`handler(request)` 表示继续往内走、最终调用真实模型。在调用 `handler` 之前可以改 request；`handler` 返回之后也可以处理 response；如果 `handler` 抛异常，则进入异常路径。
-
-这一层涉及的 middleware ：
-
-```text
-ToolOutputBudget(model side)
-DanglingToolCall
-LLMErrorHandling
-LoopDetection(wrap_model_call soft warning)
-SkillActivation
-Todo(wrap_model_call completion reminder)
-DeferredToolFilter(model side)
-```
-
-**ToolOutputBudget** 在 model 侧做兜底修剪。它会检查历史里的超大 `ToolMessage`，把内容换成 head/tail preview 和外置路径，避免下一次 model call 被巨大工具结果拖垮。它不是摘要器——完整输出仍然尽量保存在文件里。
-
-这一点很容易和 Summarization 混淆：
-
-```text
-Summarization:
-  conversation history boundary
-  用摘要替换旧对话
-
-ToolOutputBudget:
-  single tool result boundary
-  尽量外置完整原始输出，只把预览留在 ToolMessage
-```
-
-head/tail preview 也不是语义摘要，它只是导航信号：
-
-```text
-head:
-  帮模型判断这是什么输出、结构长什么样
-
-tail:
-  帮模型看到结尾状态、错误、总结行
-
-path:
-  如果确实需要完整内容，再用 read_file 读取
-```
-
-所以它保护的是 model context budget，而不是替模型理解文件内容。
-
-**DanglingToolCall** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dangling_tool_call_middleware.py" sha="7e7f0410" />，负责修补 provider 工具调用协议。它防的是这种历史：
-
-```text
-AIMessage(tool_calls=[call_1])
-  ...缺少 ToolMessage(tool_call_id=call_1)
-```
-
-很多 provider 要求 `AIMessage.tool_calls[*].id` 后面必须有对应的 `ToolMessage.tool_call_id`。DanglingToolCall 的算法是"先索引，再重建"：
-
-```text
-tool_messages_by_id:
-  dict[tool_call_id, deque[ToolMessage]]
-
-tool_call_ids:
-  所有 AIMessage 声明过的 tool_call id
-
-patched:
-  重新构造后的本次 request.messages
-```
-
-第一步把已有的 ToolMessage 按自己的 `tool_call_id` 分组：
-
-```python
-tool_messages_by_id[msg.tool_call_id].append(msg)
-```
-
-第二步遍历到 AIMessage 时，按它的 `tool_calls` 顺序查这个索引。查到了真实的 ToolMessage 就搬到 AIMessage 后面；查不到就补一条 synthetic `ToolMessage(status="error")`。所以最终顺序由 `AIMessage.tool_calls[].id == ToolMessage.tool_call_id` 这个协议关系重建，不依赖原消息里 ToolMessage 的物理位置。
-
-还有一个细节值得留意：`_message_tool_calls()` 在收集 tool_call id 时，会同时检查三个来源——`msg.tool_calls`、`msg.additional_kwargs["tool_calls"]`、`msg.invalid_tool_calls`。这是因为不同 provider 的 adapter 可能把 tool-call 信息放在不同的字段里，有些甚至把解析失败的调用标成 `invalid_tool_calls`。DanglingToolCall 的原则是宁可多修也不少修——只要某个 AIMessage 声称自己发出了工具调用，不管存在哪个字段，都得保证后面有对应的 ToolMessage。
-
-注意它修的是本次 `ModelRequest`，不是直接持久改 graph state：
-
-```text
-request.override(messages=patched)
-```
-
-这就是它选择 `wrap_model_call` 而不是 `before_model` 的原因：必须把ToolMessage插到对应的 AIMessage 后面，不能简单 append 到末尾。
-
-**LLMErrorHandling** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py" sha="7e7f0410" />。它守的是 model provider 的边界：超时、连接失败、5xx、429、quota/auth 等异常都在这里分类处理。可重试的 transient/busy 会退避重试；不可重试或重试耗尽，会返回 fallback `AIMessage`。
-
-它处理的是 `handler(request)` 抛出的异常——也就是"没拿到正常 AIMessage"的情况。它不管 provider 正常返回但返回内容不可信的情况。这个边界很重要：下一站的 `SafetyFinishReasonMiddleware` 就是处理"provider 正常返回 AIMessage，但 finish_reason 表示安全截断，tool_calls 不可信"的场景。
-
-它还有一个熔断器（circuit breaker）：
-
-```text
-closed     电路连通，模型调用正常通过
-open       电路断开，快速失败走 fallback
-half_open  恢复探测，只放一个调用测试 provider 是否恢复
-```
-
-注意 `closed` 在这里是健康态，不是"关闭请求"——这是 circuit breaker 的通用术语，并非 DeerFlow 刻意反着定义。另一个关键点：`GraphBubbleUp` 必须原样抛出，因为它代表 LangGraph 的中断/暂停/恢复控制流，不是普通异常，不能当成 provider 错误吞掉。
-
-**LoopDetection** 管两挡刹车：**hard**——重复到达上限时直接改写模型刚生成的 AIMessage、清空 `tool_calls`，强制停下——发生在 `after_model`，留到下一站讲；这里 `wrap_model_call` 只管**soft**。soft是：上一轮 `after_model` 发现有打转的苗头、但还没到 hard stop 那条线，于是先排一条提醒；等这一轮工具结果都回来之后，再把它作为一条新的 `HumanMessage` 追加到 model request 的末尾。之所以不在 `after_model` 当场插，是因为那会夹在 `AIMessage(tool_calls)` 和它配对的 `ToolMessage` 中间，破坏配对协议——所以soft warning必须等工具结果回齐了才注入。
-
-**SkillActivation** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/skill_activation_middleware.py" sha="7e7f0410" />。用户以 `/skill-name` 开头时，它会读取完整 `SKILL.md`，构造一条隐藏 `HumanMessage` 注入本次 request。注意它**不写回 graph state**，只改这一次发给模型的 request——也就是说它是 **turn-local（只作用于当前这一轮）的 request overlay（只覆盖本次请求，下一轮就没了）**。这样 skill 只在被显式激活时才进入上下文，不会每轮污染context。
-
-它和 DynamicContext 的区别：
-
-```text
-DynamicContext:
-  before_agent
-  写 graph state messages
-  conversation-level context
-
-SkillActivation:
-  wrap_model_call
-  只 override 当前 ModelRequest.messages
-  turn-local context
-```
-
-SkillActivation 还会把 `SKILL.md` 包进 XML-like envelope：
-
-```text
-<slash_skill_activation>
-  <user_request>...</user_request>
-  <skill ...>
-    <skill_content encoding="xml-escaped">...</skill_content>
-  </skill>
-</slash_skill_activation>
-```
-
-这里的 `xml-escaped` 指的是把 skill 内容里的 `<`、`>`、`&` 等字符转义成普通文本（实现上用的是 Python 的 `html.escape()`），避免 skill 文档里的标签样式内容破坏外层 prompt envelope。
-
-如果 skill 不存在、被禁用、或者当前 agent 没权限使用，middleware 会直接返回自己构造的 `AIMessage`，不浪费一次模型请求。
-
-**Todo** 在 `wrap_model_call` 里负责消费 after_model 阶段排队的 completion reminder。如果模型试图在 todo 未完成时收尾，Todo 的 after_model 会先 jump 回 model；下一次 wrap_model_call 再把隐藏 reminder 注入本轮 request。
-
-**DeferredToolFilter** 来自 <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/deferred_tool_filter_middleware.py" sha="7e7f0410" />。先说清两个词：**deferred tool**（延迟工具）是一开始不暴露给模型的工具，典型就是数量庞大的 MCP 工具——全塞进去会撑爆上下文、也干扰模型选工具；模型要用，得先调 `tool_search` 把需要的那几个 **promote（提升）** 出来。这个 middleware 的职责，就是确保没被 promote 的工具**既看不见、也调不动**。它的 enforcement 是双层的，缺一不可：
-
-```text
-wrap_model_call（model 侧）:
-  从 request.tools 里过滤掉 hidden schemas
-  模型看不到这些工具，自然不会主动调用
-
-wrap_tool_call（tool 侧）:
-  如果模型还是设法调用了 hidden tool
-  （比如从历史记忆或 prompt 泄漏中猜到了工具名）
-  直接返回 ToolMessage(status="error")，不执行
-```
-
-只做 model 侧过滤是不够的——模型仍可能从历史、prompt 提示或者 provider 的特殊行为中猜到未 promoted 工具的名字。两层都守住才算 enforcement。
-
-<Design30>
-DeferredToolFilter 的关键包括两层 enforcement：model 侧控制可见 schema，tool 侧控制可执行调用。只做前者不够——模型仍可能从历史或猜测中调用未 promoted 工具。3.0 可以把它抽象成一等的 `ToolVisibilityPolicy`，同时声明 visible、executable、blocked 三类工具。
-</Design30>
-
-<Philosophy title="工程设计哲学">
-
-向内的半程是在真实模型调用之前做好准备：运行时状态就位，模型可见上下文就位，历史消息协议就位，request 里的 tool schema 和大输出也被整理好。
-
-DeerFlow 把这些横切逻辑放进 middleware，没有塞进 graph node。好处是 graph 仍然保持"model ↔ tools"的主循环，干净且好理解；代价是顺序变成了隐式接口——一个 middleware 放错 hook，或者注册顺序不对，表面上看代码能跑，实际语义已经变了。
-
+<Philosophy>
+把长期状态与短暂请求视图区分开，才能同时照顾恢复、上下文预算和 provider 协议。middleware 的价值不在数量，而在每一步都清楚自己的数据所有权：哪些事实要保存，哪些信息只应这次发给模型。
 </Philosophy>
 
-<Tradeoff leftTitle="向内分层的好处" rightTitle="代价">
-  <Fragment slot="left">
-
-  - 横切准备逻辑不进 graph，主循环保持简单
-  - lead 和 subagent 能复用 runtime 基座
-  - 动态内容走 message stream，system prompt 保持稳定，prefix cache 友好
-
-  </Fragment>
-  <Fragment slot="right">
-
-  - 顺序是隐式约定，主要靠注释和测试守住
-  - 链按 run 条件变化，排查问题前要先还原本次装配结果
-  - 同步 hook 如果做阻塞 IO，会卡住共享事件循环
-
-  </Fragment>
-</Tradeoff>
-
-## 易误解的要点
-
-- **`before_agent` 不是每轮都跑——整个 run 只跑一次。** 每轮都得做的事（摘要、todo 提醒、图片注入）要挂 `before_model`；放错 hook，逻辑要么只生效一次、要么白跑很多遍。
-- **「注册了 middleware」≠「资源已经建好」。** 默认 lazy：`ThreadData` 只算路径不建目录，`Sandbox` 在 `before_agent` 根本不 acquire——资源要到第一次真用到时才出现。
-- **不要假设这条 run 一定挂了某个 middleware。** 链是按条件拼的（plan mode / vision / tool_search / subagent / guardrail 都会改列表）。排查异常行为前，先确认它到底在不在这次的列表里。
-- **工具里 `runtime.state[...] = x`，不等于把状态持久写回。** 那只是本次调用的局部修改，函数一返回就没了——只有从 hook 返回 `{...}` 或 `Command(update=...)`，reducer 才会合并。（Sandbox 第一次 acquire 后靠 `wrap_tool_call` 兜底提交，就是这个原因；细节见前文。）
-- **middleware 实例会跨 run 复用，状态又留在进程内存里。** 这一条性质可能造成的影响：① **同一进程内、跨 run**——实例上的状态不会自动清空，所以凡是往实例记 per-run 状态的 middleware，都需要在 `before_agent` / `after_agent` 清理；漏写这步清理，上个 run 的残留就会串进下一个 run（Todo、LoopDetection 正是为此在开场和收尾各清一次）。② **跨进程**——这些内存状态不共享，多 worker 部署（Gateway 起成多进程 / 多副本扩容）时，同一 thread 的两次 run 若落到不同 worker，循环检测、熔断、memory 去抖这些 best-effort 功能就会分别计算，效果下降。这是「状态放内存」的已知局限；不过对话本身（`messages`、`todos`、`sandbox_id` 等）由 checkpointer / store 兜底、跨 worker 一致，**不会因此错乱**。要彻底消除，需要给负载均衡配 thread 亲和路由，或把这类状态挪到共享存储（如 Redis）。
-
----
-
-这一站只走到模型调用。请求已经经过 `before_agent`、`before_model`、`wrap_model_call`，模型拿到了整理好的 request。下一站走另一半：模型返回之后，`after_model` 按逆序处理结果，工具执行前后经过 `wrap_tool_call`，run 结束时进入 `after_agent`。安全策略、循环检测、工具边界和副作用——最密集的逻辑发生在那一半。
+输入准备完成后，模型可以返回答案或提出工具调用。下一站继续跟随响应，看它如何经过裁决、执行和收尾。

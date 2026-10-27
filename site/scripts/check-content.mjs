@@ -17,6 +17,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');                       // tutorials/site
 const srcDir = join(root, 'src');
 const contentDir = join(srcDir, 'content/tutorials');
+const extensionsDir = join(srcDir, 'content/extensions');
 const journeyPath = join(srcDir, 'data/journey.ts');
 
 // —— 违禁词(trace/帧 隐喻)。视觉随意,文字别造这些词。——
@@ -94,7 +95,27 @@ for (const file of walk(contentDir)) {
   if (!j) failures.push(`${rel}: station ${fm.station} 在 journey.ts 里不存在`);
   else if (j.slug !== fm.slug) failures.push(`${rel}: slug「${fm.slug}」≠ journey.ts 的「${j.slug}」`);
   if (!mdxByStation.has(fm.station)) mdxByStation.set(fm.station, new Set());
+  if (mdxByStation.get(fm.station).has(fm.lang)) failures.push(`${rel}: 重复的 station/lang`);
   mdxByStation.get(fm.station).add(fm.lang);
+}
+
+// Extension topics are separate from journey stations, with the same bilingual contract.
+const extensionSource = readFileSync(join(srcDir, 'data/extensions.ts'), 'utf8');
+const extensionSlugs = [...extensionSource.matchAll(/slug:\s*'([^']+)'/g)].map((m) => m[1]);
+const extensionPairs = new Set();
+for (const file of walk(extensionsDir)) {
+  if (!file.endsWith('.mdx')) continue;
+  const fm = frontmatter(readFileSync(file, 'utf8'));
+  if (!fm || !['zh', 'en'].includes(fm.lang) || !extensionSlugs.includes(fm.slug)) {
+    failures.push(`${relative(root, file)}: Extension 元数据与目录不一致`);
+    continue;
+  }
+  const key = `${fm.lang}/${fm.slug}`;
+  if (extensionPairs.has(key)) failures.push(`${relative(root, file)}: 重复的 Extension/lang`);
+  extensionPairs.add(key);
+}
+for (const slug of extensionSlugs) for (const lang of ['zh', 'en']) {
+  if (!extensionPairs.has(`${lang}/${slug}`)) failures.push(`Extension ${slug}: 缺少 ${lang} 正文`);
 }
 
 // 2c) 每个 published 站都要有 zh + en
@@ -114,4 +135,4 @@ if (failures.length) {
 }
 
 const pub = [...journey.values()].filter((s) => s.status === 'published').length;
-console.log(`✓ 内容守卫通过:无违禁词;${journey.size} 站(已发布 ${pub})地图与正文一致。`);
+console.log(`✓ 内容守卫通过:无违禁词;${journey.size} 站(已发布 ${pub})与 ${extensionSlugs.length} 个 Extension 专题均有双语正文。`);

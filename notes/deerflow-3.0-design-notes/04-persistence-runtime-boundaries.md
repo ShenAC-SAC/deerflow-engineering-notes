@@ -1,212 +1,35 @@
-# DeerFlow 3.0 Design Notes: Persistence Runtime Boundaries
+# 持久化：保留的设计观察
 
-This note records design observations from reading the current DeerFlow persistence and Gateway runtime code.
+核对基线：DeerFlow 2.2.0 开发快照 `51d59a1cdff92626bd9f03f1b2254f34a824ca3e`（2026-10-27）。
 
-## Current Shape
+本文件结合当前实现，记录需要进一步核实的设计问题。每个问题都说明已有机制与评估条件，不将候选方案视为运行行为或已确认缺陷。
 
-DeerFlow has several persistence surfaces:
+## 当前机制
 
-```text
-LangGraph checkpointer
-  graph state and checkpoint history.
+Checkpointer 与 Store 优先使用显式 checkpointer 配置，未配置时跟随 database。worker lease 与 heartbeat 约束执行归属，远端取消通过持久化意图协调，Redis bridge 支持跨进程流。多实例启动校验与 delta checkpoint 各自有独立的配置条件。
 
-LangGraph store
-  long-term KV state exposed through Runtime.store.
+## 配置优先级与消费者
 
-RunStore
-  run lifecycle rows and token summaries.
+显式 checkpointer 配置优先于 database。能否移除该兼容入口是迁移决策，需要识别外部配置消费者与迁移路径。没有这些证据，不建议直接引入新的 PersistenceProfile 或删除兼容支持。
 
-RunEventStore
-  message / trace / lifecycle events.
+## 仍值得研究：每个数据面的恢复承诺
 
-ThreadMetaStore
-  thread list, owner, title, status, metadata.
-```
+当前教程已经分别说明 checkpoint、run、events、stream、thread metadata 与文件。若产品界面仍让用户误判可恢复性，先用具体断连/重启/过期案例验证，再改现有健康或状态输出。不要将 schema migration 与图状态恢复混为一谈。
 
-This separation is reasonable. These surfaces have different query patterns and different recovery semantics. The main 3.0 opportunity is to make the boundaries first-class and configured through one runtime profile.
+## 仍值得研究：派生数据的修复
 
-Application-table schema bootstrap is a startup-path responsibility. `persistence.bootstrap.bootstrap_schema()` handles empty DBs, legacy pre-Alembic DBs, and already-versioned DBs with a hybrid `create_all` + Alembic stamp/upgrade strategy. The observations below focus on runtime configuration and recovery semantics rather than schema creation.
+线程列表标题等派生值与 checkpoint 的同步仍应按实际写入路径检查。排查时先检查现有序列、incarnation 与条件写入，确认它们能否定位和修复陈旧投影，再判断是否需要补充来源或同步时间信息。
 
-## Design Observation 1: `database` And `checkpointer` Are Not Fully Unified
+## 不会自动消失的边界
 
-The new `database` section intends to configure both checkpointer and application persistence.
+租约回收不恢复原 Python task，图 rollback 不撤销外部副作用。重复外部写入需要业务幂等；长期任务需要明确队列和恢复契约。数据库与缓存都不能替代这些协议。
 
-Current async Gateway path:
+## 核对入口
 
-```text
-make_checkpointer(config)
-  reads legacy checkpointer first
-  then reads database
+- [backend/packages/harness/deerflow/runtime/store/async_provider.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/runtime/store/async_provider.py)
+- [backend/packages/harness/deerflow/runtime/runs/manager.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/runtime/runs/manager.py)
+- [backend/packages/harness/deerflow/runtime/stream_bridge/redis.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/runtime/stream_bridge/redis.py)
+- [backend/app/gateway/deps.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/app/gateway/deps.py)
+- [backend/packages/harness/deerflow/persistence/thread_meta/sql.py](https://github.com/bytedance/deer-flow/blob/51d59a1cdff92626bd9f03f1b2254f34a824ca3e/backend/packages/harness/deerflow/persistence/thread_meta/sql.py)
 
-init_engine_from_config(config.database)
-  initializes SQLAlchemy app persistence
-
-make_store(config)
-  reads only legacy checkpointer
-  does not read database
-```
-
-Therefore a valid-looking configuration can produce mixed persistence:
-
-```text
-database.backend = sqlite
-checkpointer omitted
-
-checkpointer  -> SQLite from database
-run_store     -> SQL from database
-thread_meta   -> SQL from database
-store         -> InMemoryStore
-```
-
-For 3.0, introduce one `PersistenceProfile` resolved at startup:
-
-```ts
-interface PersistenceProfile {
-  backend: "memory" | "sqlite" | "postgres";
-  checkpointer: CheckpointerSpec;
-  store: StoreSpec;
-  runStore: RunStoreSpec;
-  runEventStore: RunEventStoreSpec;
-  threadMetaStore: ThreadMetaStoreSpec;
-}
-```
-
-All factories should consume the same resolved profile, not re-derive their backend independently.
-
-## Design Observation 2: Startup Validation Should Reject Impossible Combinations
-
-Current behavior can silently fall back:
-
-```text
-run_events.backend = db
-database.backend = memory
-  -> MemoryRunEventStore fallback
-```
-
-Fallbacks are convenient during development, but production operators need explicit feedback.
-
-For 3.0, validate persistence combinations at startup:
-
-```text
-run_events.backend=db requires database.backend != memory
-store backend must match checkpointer backend unless explicitly overridden
-jsonl run events are single-process only
-postgres multi-worker requires worker ownership / lease semantics
-```
-
-The validation output should be operational, not abstract:
-
-```text
-Invalid persistence config:
-  run_events.backend=db requires database.backend=sqlite or postgres.
-  Current database.backend=memory would lose run messages after restart.
-```
-
-## Design Observation 3: Recovery Contract Should Be Written Per Surface
-
-Users often hear "persistence" and assume every runtime detail survives restart. DeerFlow does not and should not promise that.
-
-For 3.0, document and expose a recovery contract:
-
-```text
-checkpoint survives?
-message history survives?
-run list survives?
-thread list survives?
-active run can continue?
-active run can be cancelled after restart?
-SSE stream can be rejoined after restart?
-```
-
-Expected answers may look like:
-
-```text
-checkpoint survives if checkpointer is persistent
-message history survives if run_event_store is db/jsonl
-run list survives if run_store is SQL
-thread list survives if thread_meta is SQL or persistent store
-active asyncio task never survives process restart
-SSE bridge never survives process restart
-```
-
-This turns implicit runtime behavior into an explicit product contract.
-
-## Design Observation 4: In-flight Runs Need Ownership, Not Just Status
-
-`RunManager.reconcile_orphaned_inflight_runs()` marks persisted `pending` / `running` rows as error when no local task owns them. This is good for SQLite single-node restart: it prevents the UI from showing a run as active forever.
-
-For postgres or multi-worker deployments, the harder question is ownership:
-
-```text
-Which worker owns this run?
-When did it last heartbeat?
-Can another worker mark it failed?
-Can another worker take it over?
-Can a cancel request route to the owning worker?
-```
-
-For 3.0, run rows should carry a worker lease:
-
-```text
-worker_id
-lease_expires_at
-heartbeat_at
-cancel_requested_at
-cancel_action
-```
-
-That does not mean DeerFlow must support cross-worker takeover immediately. Even without takeover, the system can make cancellation and recovery semantics explicit:
-
-```text
-same worker active
-  cancel by task handle.
-
-other worker active
-  route or reject with actionable status.
-
-lease expired
-  mark error or enqueue recovery.
-```
-
-## Design Observation 5: Thread Title Sync Is A Derived Projection
-
-The canonical title lives in checkpoint channel values during graph execution. `run_agent()` later syncs it into `threads_meta.display_name` so `/threads/search` can list threads cheaply.
-
-This is a projection:
-
-```text
-checkpoint.title -> threads_meta.display_name
-```
-
-Projection failures are non-fatal today, which is reasonable, but the UI can then show a stale title.
-
-For 3.0, derived projections should be marked as derived:
-
-```text
-display_name
-display_name_source_checkpoint_id
-display_name_synced_at
-```
-
-This lets the API or a repair job know whether a list row is stale.
-
-## Proposed 3.0 Shape
-
-```text
-PersistenceProfile
-  one resolved startup object for all persistence factories.
-
-PersistenceValidator
-  rejects or clearly warns about incompatible combinations.
-
-RecoveryContract
-  surfaced in docs and health endpoint.
-
-RunOwnershipLease
-  makes active-run recovery and cancellation explicit.
-
-ProjectionMetadata
-  marks thread_meta fields derived from checkpoint state.
-```
-
-The goal is not to collapse every table into one store. The goal is to preserve useful separation while removing ambiguous configuration and recovery behavior.
+验证方式：固定提交的静态源码对照；未把真实模型、多 worker 或外部服务运行结果作为本笔记的已验证事实。

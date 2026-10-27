@@ -1,0 +1,81 @@
+---
+lang: en
+slug: memory-backends
+title: "Memory backends — what reaches the next request"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
+sourceRefs:
+  - backend/packages/harness/deerflow/agents/memory/manager.py
+  - backend/packages/harness/deerflow/config/memory_config.py
+  - backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py
+  - backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py
+  - backend/packages/harness/deerflow/agents/memory/tools.py
+  - backend/packages/harness/deerflow/agents/memory/summarization_hook.py
+  - backend/packages/harness/deerflow/agents/memory/backends/deermem/deer_mem.py
+  - backend/packages/harness/deerflow/agents/memory/backends/noop/noop_manager.py
+---
+import FlowDiagram from '../../../components/FlowDiagram.astro';
+import Philosophy from '../../../components/Philosophy.astro';
+import Tradeoff from '../../../components/Tradeoff.astro';
+import MarginNote from '../../../components/MarginNote.astro';
+import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
+
+After reading the report, the user says, “For future comparisons, list constraints before conclusions.” How does the next request obtain that preference?
+
+**Conversation messages, compacted summaries, and long-term memory are different data surfaces.** Messages support graph execution; summaries preserve task continuity; memory stores and retrieves experience useful across requests.
+
+<FlowDiagram caption="Main read/write path in automatic memory mode, subject to configuration and backend behavior."
+ chart={`flowchart LR
+ OLD["Previous conversation"] --> MW["MemoryMiddleware"]
+ MW --> MAN["MemoryManager.add / aadd"]
+ MAN --> BACK["Selected backend"]
+ BACK --> CTX["get_context / aget_context"]
+ NOW["New prompt"] --> QUERY["Bounded current-turn query"]
+ QUERY --> CTX
+ CTX --> DYN["DynamicContext"]
+ DYN --> MODEL["New model request"]`} />
+
+## Two connections to the main journey
+
+<SourceRef file="backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="MemoryMiddleware" /> passes messages and user/agent/trace identity to the manager on applicable completion paths. <SourceRef file="backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> retrieves memory for a new request, optionally passing a bounded query derived from the current user input.
+
+Extraction, queuing, and consolidation can happen between these points. Run completion does not imply that memory is synchronously committed or immediately readable.
+
+## MemoryManager and its backends
+
+<SourceRef file="backend/packages/harness/deerflow/agents/memory/manager.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="MemoryManager" /> defines add, get_context, search, and management operations. The factory resolves `memory.manager_class`; some management operations are optional and may be unsupported.
+
+<SourceRef file="backend/packages/harness/deerflow/config/memory_config.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="MemoryConfig" /> separates host settings from `backend_config`. DeerMem owns its private storage/extraction settings. Available implementations include Mem0, OpenViking, Honcho, and noop. Selecting one also requires matching its dependencies, durability, and service configuration.
+
+An unknown backend must not silently become another store. <SourceRef file="backend/packages/harness/deerflow/agents/memory/backends/noop/noop_manager.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> is an explicit no-operation choice, not recovery from configuration failure.
+
+## Middleware and tool modes
+
+| Mode | Who initiates operations | Effect on the report workflow |
+| --- | --- | --- |
+| middleware | Host context preparation and completion | Automatically extract and later supply preferences |
+| tool | Model invokes memory tools | Explicitly search for or save experience |
+
+<SourceRef file="backend/packages/harness/deerflow/agents/memory/tools.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> supplies memory tools, still subject to authorization. Tool mode normally avoids duplicate passive writing, but conversation-extraction backends can declare that passive writes remain necessary. The factory combines the selected mode with the backend declaration to decide whether passive writing is installed.
+
+Backend enablement, `injection_enabled`, and an agent's `memory_enabled` are separate gates.
+
+## Identity and failures in background updates
+
+Background updates capture user/agent/thread identity before enqueueing; timer threads cannot assume they inherit request context.
+
+Read failures also have policy. A backend permitting degraded reads can return empty context; one configured to require memory raises a read error that callers must preserve. Swallowing every exception misrepresents failure as absence.
+
+<SourceRef file="backend/packages/harness/deerflow/agents/memory/summarization_hook.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> offers a pre-compaction memory boundary. It gives a backend a chance to retain useful content before removal; it does not guarantee every message becomes a durable fact.
+
+## Extraction cost and shutdown
+
+Optional prescreen and signal-classification settings distinguish off, shadow, and behavior-changing modes. Observing a decision does not mean applying it.
+
+Shutdown can call `shutdown_flush` within a host time budget. This is bounded draining, not a guarantee that an arbitrary queue survives termination. Deployment grace periods must accommodate it.
+
+<Philosophy>
+Memory requires clear rules for retained content, ownership, retrieval, update timing, and failure. MemoryManager defines responsibilities between the host and backend so callers can reason about reads and writes.
+</Philosophy>
+
+The next report's format preference can come from memory. Progress on the current report comes from graph state and durable context. Separating them explains why remembering a preference does not restore a previous file operation.

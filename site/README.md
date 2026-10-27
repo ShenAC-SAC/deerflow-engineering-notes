@@ -1,70 +1,67 @@
 # DeerFlow Engineering Notes · Site
 
-DeerFlow Python 版工程源码手记。
+从用户的一句 prompt 出发，沿九站理解 DeerFlow 的 Python agent runtime。
+当前基线是 **2.2.0 开发快照**（2026-10-27），不是正式 Release；固定提交见 `src/data/source.json`。
 
-站点用「请求的旅程」组织文章:从一句话进入 Gateway,到 run 创建、agent 图装配、工具能力计算,逐站拆开 DeerFlow 的运行时设计。目标是把工业级 Agent 系统讲清楚,同时保留一点轻松的工程博客语气。
+## 内容结构
 
-## 心智模型
-
+```text
+src/data/journey.ts              九站主线元数据
+src/content/tutorials/{zh,en}/   主线双语正文
+src/data/extensions.ts           独立 Extension 专题目录
+src/content/extensions/{zh,en}/  扩展机制、记忆后端、长期目标与调度
+src/data/source.json             版本、核对日期和上游 SHA
 ```
-旅程地图(数据) ──▶ src/data/journey.ts      9 站卡片元数据(双语 + 风险 + 抽象高度 + 锁定态)
-深读正文(内容) ──▶ src/content/tutorials/   MDX + 组件; published 站必须中英齐全
-```
 
-地图是数据、深读是内容,各自演化、互不绑架。索引读 `journey.ts` 渲染全部 9 站;
-`status: 'published'` 的站会在卡片上放开入口,并且必须同时有 zh/en 深读。locked 站可以先保留单语草稿,但不会在旅程卡片上开放。
+九站是阅读顺序，能力实际执行时间以正文流程为准。Extension 是阅读分区，不表示所有专题都通过 Python plugin 实现。
+公开正文是唯一完整教程；`../notes/` 保存源码阅读索引和仍需证据的个人设计观察。
 
-## 命令
+## 安装与预览
+
+需要 Node >=22.12、pnpm 10（与 CI 一致）、Python 3.12+ 和一份包含基线提交的 DeerFlow clone。
 
 ```bash
-pnpm dev          # 本地预览 http://localhost:4321
-pnpm build        # 静态构建到 dist/
-pnpm preview      # 预览构建产物
-pnpm check:content # 内容守卫:地图/正文一致,避免旧隐喻词回流
-pnpm check:refs    # 锚定校验:sourceRefs 必须在钉死的 SHA 下真实存在
-pnpm check         # check:content && check:refs && build(提交前跑这个)
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-## 目录
+预览通常在 `http://127.0.0.1:4321/`。根路径默认英文，`/zh/` 是中文首页；两种语言都提供 Extension 入口。
 
-```
-src/
-  data/journey.ts                 旅程地图(单一数据源)
-  content.config.ts               深读集合 + zod schema(校验牙齿)
-  content/tutorials/{zh,en}/*.mdx  双语深读正文
-  components/                     RiskMeter / StationCard / JourneyIndex
-                                  MentalModel / MarginNote / Philosophy
-                                  Tradeoff / SourceRef / FlowDiagram
-  layouts/                        BaseLayout / TutorialLayout
-  pages/[lang]/index.astro        旅程首页
-  pages/[lang]/journey/[station]  深读页(仅 published)
-  styles/theme.css                视觉识别:暖纸工程手记(牛皮纸·墨色·朱砂·制图蓝)
-scripts/check-content.mjs         内容守卫:地图/正文一致 + 术语边界
-scripts/check-source-refs.mjs     锚定校验脚本
+## 验证
+
+```bash
+DEERFLOW_ROOT=/path/to/deer-flow pnpm check
+# 如果 python3 仍是旧版：
+PYTHON=/path/to/python3.12 DEERFLOW_ROOT=/path/to/deer-flow pnpm check
+# 验证 GitHub Pages 子路径：
+DEPLOY_TARGET=github-pages DEERFLOW_ROOT=/path/to/deer-flow pnpm check
 ```
 
-## 加一站(把某站从 locked 变 published)
+`DEERFLOW_ROOT` 默认指向与笔记项目同级的 `deer-flow`。校验使用 `git show SHA:path`，不会要求切换该 clone 的工作区，也不会执行上游 Python 模块。
 
-1. 在 `src/data/journey.ts` 把该站 `status` 改成 `'published'`。
-2. 确认 `src/content/tutorials/zh/<slug>.mdx` 和 `en/<slug>.mdx` 都存在,frontmatter:
-   ```yaml
-   ---
-   lang: zh            # 或 en
-   slug: <slug>        # 与 journey.ts 对应
-   station: <n>
-   title: <页面标题>
-   sha: <deer-flow commit>
-   sourceRefs:
-     - backend/.../file.py
-   ---
-   ```
-3. 正文用 `<MentalModel>`(开场由布局自动渲染)、`<FlowDiagram>`、`<Philosophy>`、
-   `<Tradeoff>`、`<MarginNote>`、`<SourceRef>` 等组件。
-4. `pnpm check` 必须绿(内容守卫 + 锚点存在 + 构建通过)。
+- `check:content`：主线与专题的双语覆盖、重复条目与术语约定。
+- `check:refs`：frontmatter 与行内 SourceRef 的 SHA 一致性、文件存在性、Python 定义的 AST 检查。
+- `build`：Astro/MDX 静态构建。
+- 构建路由检查：所有文章的语言切换、源码版本与站内链接。
 
-## 约定
+文件或符号存在不能证明正文语义正确。升级时仍须阅读当前实现；页面通过也不代表真实模型、多 worker、数据库和 sandbox 已运行验证。
 
-- 中英**统一笔调、风趣一点点**,纯文字 + 可视化,无音频。
-- **工程设计哲学是一等公民**:用 `<Philosophy>` / `<Tradeoff>` 显式承载「为什么这么设计」。
-- 源码指针**钉 SHA、锚定不变量**;改源码后用 `pnpm check:refs` 复核。
-- `site/src/data/journey.ts` 是旅程地图的单一数据源;已发布站点必须同时有 zh/en 深读。
+## 维护规则
+
+每次升级先固定上游提交，再修改语义与图示，最后同步 `source.json`、文章 frontmatter、行内源码引用和 CI checkout。
+
+增加主线站点时同步 `journey.ts` 与 zh/en 正文；增加专题时同步 `extensions.ts` 与 zh/en 专题正文。专题不使用 station 编号。
+
+```yaml
+---
+lang: zh
+slug: extension-system
+title: "扩展机制：能力怎样接入一次请求"
+sha: <完整上游 SHA>
+sourceRefs:
+  - backend/packages/harness/deerflow/extensions/loader.py
+---
+```
+
+行内 SourceRef 使用静态 file/sha 属性；Python symbol 使用真实定义名，如 `ExtensionSpec` 或 `SandboxProvider.get_scoped`。
+图示用现有 FlowDiagram，设计取舍用 Philosophy/Tradeoff。正文直接说明固定版本的职责、流程与边界，不穿插版本对比、改稿过程或设计落地回顾。设计观察单独记录，并说明证据与适用条件。

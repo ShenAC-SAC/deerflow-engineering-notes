@@ -2,6 +2,7 @@
 import type { CollectionEntry } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
 import MentalModel from '../components/MentalModel.astro';
+import SourceBaseline from '../components/SourceBaseline.astro';
 import SourceRef from '../components/SourceRef.astro';
 import { JOURNEY, type Lang, type Station } from '../data/journey.ts';
 import { link } from '../utils/link.ts';
@@ -40,12 +41,14 @@ const homePath = link(lang === 'zh' ? '/zh/' : '/');
 
     <MentalModel label={t.mm}>{meta.mentalModel[lang]}</MentalModel>
 
-    <div class="tut-refs">
-      <span class="eyebrow tut-refs-label">{t.refs} · @{sha.slice(0, 7)}</span>
+    <SourceBaseline lang={lang} />
+
+    <details class="tut-refs">
+      <summary class="eyebrow tut-refs-label">{t.refs} · @{sha.slice(0, 8)}</summary>
       <div class="tut-refs-list">
         {sourceRefs.map((f) => <SourceRef file={f} sha={sha} full />)}
       </div>
-    </div>
+    </details>
 
     <div class="prose"><slot /></div>
 
@@ -83,6 +86,7 @@ const homePath = link(lang === 'zh' ? '/zh/' : '/');
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   }
   .tut-refs-label { color: var(--ink-faint); }
+  summary.tut-refs-label { cursor: pointer; }
   .tut-refs-list { margin-top: 9px; }
 
   .prose { font-size: 1.06rem; }

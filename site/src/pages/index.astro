@@ -1,5 +1,6 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import ExtensionIndex from '../components/ExtensionIndex.astro';
 import JourneyIndex from '../components/JourneyIndex.astro';
 
 const lang = 'en';
@@ -7,4 +8,5 @@ const title = 'DeerFlow Engineering Notes';
 ---
 <BaseLayout title={title} lang={lang}>
   <JourneyIndex lang={lang} />
+  <ExtensionIndex lang={lang} />
 </BaseLayout>

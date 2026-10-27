@@ -1,0 +1,48 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import BaseLayout from './BaseLayout.astro';
+import SourceBaseline from '../components/SourceBaseline.astro';
+import SourceRef from '../components/SourceRef.astro';
+import { EXTENSIONS } from '../data/extensions';
+import { link } from '../utils/link';
+interface Props { entry: CollectionEntry<'extensions'>; }
+const { entry } = Astro.props;
+const { lang, title, sha, sourceRefs, slug } = entry.data;
+const topic = EXTENSIONS.find((item) => item.slug === slug);
+if (!topic) throw new Error(`Unknown Extension topic: ${slug}`);
+const home = link(lang === 'zh' ? '/zh/' : '/');
+---
+<BaseLayout title={`${title} · DeerFlow`} lang={lang}>
+  <article class="extension-article wrap">
+    <a href={`${home}#extensions`}>{lang === 'zh' ? '← 返回 Extension' : '← Back to Extension'}</a>
+    <header>
+      <p class="eyebrow">Extension · {topic.connection[lang]}</p>
+      <h1>{title}</h1>
+      <p class="intro">{topic.summary[lang]}</p>
+      <SourceBaseline lang={lang} />
+    </header>
+    <details class="refs">
+      <summary>{lang === 'zh' ? '源码锚点' : 'Source anchors'} · @{sha.slice(0, 8)}</summary>
+      <div>{sourceRefs.map((file) => <SourceRef file={file} sha={sha} full />)}</div>
+    </details>
+    <div class="prose"><slot /></div>
+    <nav aria-label="Extension">
+      {EXTENSIONS.filter((item) => item.slug !== slug).map((item) => (
+        <a href={link(`/${lang}/extensions/${item.slug}/`)}>{item.title[lang]} →</a>
+      ))}
+    </nav>
+  </article>
+</BaseLayout>
+<style>
+  .extension-article { max-width: 880px; padding-top: 40px; padding-bottom: 48px; }
+  header { margin: 28px 0; }
+  h1 { font-family: var(--display); font-size: 2.4rem; line-height: 1.2; }
+  .intro { color: var(--ink-2); line-height: 1.8; }
+  .refs { margin: 24px 0 36px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  summary { cursor: pointer; font-family: var(--mono); font-size: .8rem; }
+  .refs div { margin-top: 12px; }
+  .prose { font-size: 1.06rem; }
+  .prose :global(h2) { scroll-margin-top: 70px; }
+  nav { display: grid; gap: 12px; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--line); }
+  @media (max-width: 560px) { h1 { font-size: 1.9rem; } }
+</style>

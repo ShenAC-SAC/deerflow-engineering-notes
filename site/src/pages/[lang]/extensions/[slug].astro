@@ -1,0 +1,14 @@
+---
+import { getCollection, render } from 'astro:content';
+import ExtensionLayout from '../../../layouts/ExtensionLayout.astro';
+export async function getStaticPaths() {
+  const entries = await getCollection('extensions');
+  return entries.map((entry) => ({
+    params: { lang: entry.data.lang, slug: entry.data.slug },
+    props: { entry },
+  }));
+}
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<ExtensionLayout entry={entry}><Content /></ExtensionLayout>

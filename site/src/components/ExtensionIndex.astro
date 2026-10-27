@@ -1,0 +1,34 @@
+---
+import { EXTENSIONS } from '../data/extensions';
+import type { Lang } from '../data/journey';
+import { link } from '../utils/link';
+interface Props { lang: Lang; }
+const { lang } = Astro.props;
+---
+<section class="extensions wrap" id="extensions" aria-labelledby="extensions-heading">
+  <p class="eyebrow">Extension</p>
+  <h2 id="extensions-heading">{lang === 'zh' ? '沿着主线，继续展开' : 'Explore beyond the main journey'}</h2>
+  <p class="intro">{lang === 'zh'
+    ? '九站解释一次 prompt 如何执行。这里单独展开横跨多个站点的模块，每篇都标明它与主线的连接。Extension 是阅读分区；其中的记忆和调度也包含 DeerFlow 的内置能力。'
+    : 'The nine stops explain one prompt. These topics unpack modules that cross several stops and show where they connect. Extension is a reading section; memory and scheduling also include built-in DeerFlow capabilities.'}</p>
+  <div class="topics">
+    {EXTENSIONS.map((topic) => (
+      <a class="topic" href={link(`/${lang}/extensions/${topic.slug}/`)}>
+        <h3>{topic.title[lang]}</h3>
+        <p>{topic.summary[lang]}</p>
+        <small>{topic.connection[lang]} →</small>
+      </a>
+    ))}
+  </div>
+</section>
+<style>
+  .extensions { padding-top: 36px; padding-bottom: 64px; border-top: 1px solid var(--line); }
+  h2 { font-family: var(--display); font-size: 2rem; margin: 10px 0; }
+  .intro { color: var(--ink-2); max-width: 720px; line-height: 1.8; }
+  .topics { display: grid; gap: 14px; margin-top: 24px; }
+  .topic { display: block; padding: 22px 26px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .topic:hover { border-color: var(--blue); text-decoration: none; }
+  h3 { margin: 0 0 8px; color: var(--blue); font-family: var(--display); }
+  .topic p { margin: 0 0 10px; color: var(--ink-2); line-height: 1.7; }
+  small { color: var(--ink-faint); }
+</style>

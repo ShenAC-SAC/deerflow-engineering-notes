@@ -2,10 +2,15 @@
 lang: en
 slug: 02-lead-agent-factory
 station: 2
-title: Lead-agent factory · assemble an agent graph
-sha: 7e7f0410
+title: "Lead-agent factory — the graph and its assembly description"
+sha: 51d59a1cdff92626bd9f03f1b2254f34a824ca3e
 sourceRefs:
+  - backend/app/gateway/services.py
   - backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  - backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  - backend/packages/harness/deerflow/agents/thread_state.py
+  - backend/packages/harness/deerflow/models/reasoning.py
+  - backend/packages/harness/deerflow/runtime/checkpoint_mode.py
   - backend/langgraph.json
 ---
 import FlowDiagram from '../../../components/FlowDiagram.astro';
@@ -13,117 +18,90 @@ import Philosophy from '../../../components/Philosophy.astro';
 import Tradeoff from '../../../components/Tradeoff.astro';
 import MarginNote from '../../../components/MarginNote.astro';
 import SourceRef from '../../../components/SourceRef.astro';
+import { link } from '../../../utils/link';
 
-Your prompt has crossed the frontend, passed through the Gateway, and become a run. Now it reaches `make_lead_agent()`. This stop is about how runtime options plus application config become a runnable LangGraph agent graph.
+The report request has a run identity. Its factory selects the model, tools, middleware, and state structure. **Assembly builds the graph; invocation performs reasoning.**
 
-Hold onto one idea: **this function assembles runtime options and application config into an agent graph.** Reasoning happens later, inside the model-tool-middleware loop. This function only bolts the parts together and hands off the compiled graph. It does not even run the graph itself.
+The factory returns `LeadAgentAssembly` with the executable graph, effective model, and an optional assembly descriptor.
 
-<FlowDiagram
-  caption="How a run reaches a compiled agent graph"
-  chart={`flowchart TD
-  FE["Frontend / API"] --> GW["DeerFlow Gateway · run_agent()"]
-  GW --> MK["make_lead_agent(config)"]
-  MK -->|"compat: resolve AppConfig"| RC["_get_runtime_config(config)"]
-  RC --> MLA["_make_lead_agent(config, app_config=...)"]
-  MLA --> CA["create_agent(model, tools, middleware, prompt, ThreadState)"]
-  CA --> G["compiled LangGraph agent graph"]`}
-/>
+<FlowDiagram caption="Two host entrances share one assembly core."
+ chart={`flowchart TD
+ GW["Gateway resolve_agent_factory"] --> AS["assemble_lead_agent"]
+ LG["LangGraph Server make_lead_agent"] --> AS
+ AS --> MODE["Resolve config; freeze checkpoint mode"]
+ MODE --> CORE["_assemble_lead_agent"]
+ CORE --> CAP["Identity, model, tools, authorization"]
+ CAP --> MW["Middleware and extensions"]
+ MW --> GRAPH["create_agent"]
+ GRAPH --> RESULT["LeadAgentAssembly"]
+ RESULT --> WORKER["Gateway retains description and executes"]
+ RESULT --> ABI["make_lead_agent returns graph only"]`} />
 
-## One factory, two entry points
+## Entrances and assembly core
 
-Open <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="7e7f0410" /> and you'll find a pair of near-twins: `make_lead_agent()` and `_make_lead_agent()`. The underscore is not cosmetic: it marks the most important boundary in the file.
+<SourceRef file="backend/app/gateway/services.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="resolve_agent_factory" /> returns <SourceRef file="backend/packages/harness/deerflow/agents/lead_agent/agent.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="assemble_lead_agent" />.
 
-**`make_lead_agent(config)`** takes a single argument because LangGraph Server requires graph factories to be callable from a config-only entry (see <SourceRef file="backend/langgraph.json" sha="7e7f0410" />). Its job is light: resolve an `AppConfig` (prefer the runtime-injected one, fall back to `get_app_config()`), then hand off to the underscore version. It is a **compatibility adapter**.
+| Function | Result and purpose |
+| --- | --- |
+| `make_lead_agent(config)` | Returns `assemble_lead_agent(config).graph`, preserving the Server ABI |
+| `assemble_lead_agent(config, *, app_config=None)` | Resolves configuration, freezes checkpoint mode, and returns the assembly |
+| `_assemble_lead_agent(config, *, app_config)` | Computes and builds the actual graph |
+| `_make_lead_agent(config, *, app_config)` | Preserves graph-only callers without the public entrance's mode freeze |
 
-**`_make_lead_agent(config, *, app_config)`** is the actual assembly function. That `*` makes `app_config` keyword-only — because both arguments are "config-like," and positional calls are too easy to confuse. Its work is deterministic: build the graph, step by step, from runtime options plus application config.
+<SourceRef file="backend/langgraph.json" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" /> registers `make_lead_agent` for LangGraph Server. Gateway uses `assemble_lead_agent` to obtain both the graph and its assembly information.
 
-<MarginNote>The underscore enforces nothing in Python. Here it still marks a useful boundary: the outer function handles compatibility, and the inner function does the assembly work.</MarginNote>
+## Identity precedes capability
 
-## How the runtime options get assembled
+The core resolves authoritative identity before loading the user's custom agent. Ordinary client fields cannot replace reserved host authentication fields. It then narrows:
 
-`_get_runtime_config()` merges `config["configurable"]` and `config["context"]`. Note this is **not a mathematical union** — it's ordered: lay down `configurable` first, then let `context` overwrite same-named keys.
+- Agent skills against resource authorization.
+- Allowed child types, concurrency, and total delegation.
+- Interactive clarification and host-provided scheduling capabilities.
+- Model access and tool permissions.
 
-The fields it reads are **per-run options**, not global application settings:
+For example, `allowed_subagents=[]` forbids delegation even if the request enables subagents. A live scheduler capability cannot be forged through checkpoint configuration.
 
-```text
-model_name / model
-thinking_enabled
-reasoning_effort
-is_plan_mode
-subagent_enabled
-max_concurrent_subagents
-is_bootstrap
-agent_name
-```
+## Model selection includes normalization
 
-## How the model is chosen
+Normal resolution considers request, agent defaults, global configuration, and authorization. Explicit selection must be consistent and allowed rather than silently replaced.
 
-Model resolution has a clear priority:
+Options such as `thinking_enabled` distinguish omission from explicit `false`. <SourceRef file="backend/packages/harness/deerflow/models/reasoning.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="resolve_reasoning_request" /> normalizes the result against the model contract: unsupported thinking is disabled, required thinking is enabled, and effort values may map to provider vocabulary.
 
-```text
-request model_name
-  > custom agent config model
-  > AppConfig.models[0]
-```
+Requested and effective settings can differ. Metadata and `effective_model` must represent actual execution.
 
-If `thinking_enabled=True` but the selected model does not support thinking, the factory logs a warning and turns `thinking_enabled` back off. You can ask for thinking; the model still has to support it.
+<MarginNote>In-graph model construction uses `attach_tracing=False` because callbacks attach at the graph invocation root. Double attachment can duplicate spans and break user/session attribution.</MarginNote>
 
-## The final formula
+## Assembly steps
 
-Once every part is in place, the line emits this:
+The normal branch:
 
-```python
-create_agent(
-    model=create_chat_model(...),
-    tools=filtered_tools,
-    middleware=build_middlewares(...),
-    system_prompt=apply_prompt_template(...),
-    state_schema=ThreadState,
-)
-```
+1. Collect candidates and append available skill-discovery, memory, project-document, and task-continuity tools.
+2. Authorize tools, then construct the deferred MCP catalog.
+3. Compose middleware and extensions; narrow and verify middleware-declared tools.
+4. Render the prompt from the same effective capabilities.
+5. Select a checkpoint-compatible state schema and call `create_agent()`.
+6. Return `LeadAgentAssembly`.
 
-The mental model, in one line:
+Bootstrap is a narrow branch for creating custom agents. Some webhook origins withhold self-modification tools so external comments cannot persist changes to an agent.
 
-```text
-Lead Agent graph = model + tools + middleware + system_prompt + ThreadState
-```
+## State schema participates in assembly
 
-`create_agent()` provides the standard model-and-tool loop. DeerFlow supplies the **materials** (model, tools) and the **policies** (middleware, prompt, state schema).
+<SourceRef file="backend/packages/harness/deerflow/runtime/checkpoint_mode.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="freeze_checkpoint_channel_mode" /> fixes `full` or `delta` at process scope. <SourceRef file="backend/packages/harness/deerflow/agents/thread_state.py" sha="51d59a1cdff92626bd9f03f1b2254f34a824ca3e" symbol="get_thread_state_schema" /> supplies the structure, and middleware schemas must agree.
 
-<Philosophy title="Design rationale">
+This is not a per-prompt preference. Processes sharing checkpoint storage must be compatible. Changes require restart and checks against existing data.
 
-Why does `make_lead_agent` exist in such an awkward shape? Because it serves several hosts at once: the official LangGraph Server / Studio, the DeerFlow Gateway, embedded clients, tests — and it bridges two conventions, the older `configurable` and the newer `context`.
+## What the descriptor records
 
-`app_config` being retrievable from runtime config *and* having a global fallback is exactly that awkwardness: it lets the Gateway inject a hot-loaded config snapshot **without breaking the LangGraph Server ABI**.
+| Field | Meaning |
+| --- | --- |
+| `graph` | Executable graph |
+| `effective_model` | Selected model |
+| `descriptor` | On-demand assembly description; may be None when no relevant evidence consumer needs it |
 
-The design lesson: **keep compatibility boundaries explicit, and keep them in one place.** Funnel all the awkwardness into a single, clearly named adapter, and let the main assembly path stay deterministic and clean. That beats sprinkling compatibility logic everywhere.
+The descriptor records the model, tools, middleware, and effective policies for extensions and auditing. It describes execution configuration; it does not validate task results or replace the executable graph.
 
+<Philosophy>
+Returning the graph with its assembly description puts execution and the basis for explaining execution at one boundary. Compatibility hosts take the graph; evidence-aware hosts retain the description.
 </Philosophy>
 
-<Tradeoff leftTitle="Clean assembly · _make_lead_agent" rightTitle="Compat cost · make_lead_agent">
-  <Fragment slot="left">
-
-  - receives an explicit `AppConfig`
-  - assembles **deterministically** from runtime options
-  - easy to test, easy to reason about
-
-  </Fragment>
-  <Fragment slot="right">
-
-  - single-arg ABI (LangGraph Server requires it)
-  - `app_config` via runtime config + global fallback
-  - `cfg` is overloaded; `config` is mutated in place
-
-  </Fragment>
-</Tradeoff>
-
-## Where it will trip you up
-
-- **`cfg` is an overloaded name.** It carries per-run options, but may also contain infrastructure fields like `app_config`, `thread_id`, or `run_id`. Don't assume what `cfg` holds.
-- **`config` is mutated in place.** The factory writes `metadata` and `callbacks` into it — don't treat it as read-only.
-- **Bootstrap vs. custom agent is easy to mix up.** `setup_agent` shows up only in the bootstrap flow; `update_agent` only when chatting with an existing custom agent. Pick the wrong one and you call the wrong tool.
-- **Middleware order is assembled elsewhere, yet it's part of the final behavior.** Touch this line and you may quietly change runtime semantics. The middleware chapter returns to that risk.
-
----
-
-That is the assembly line. Its value is **determinism**: it assembles the graph from configuration, without reasoning here or changing policy on the fly. The next stop looks at tool assembly, because what the model can call decides what this graph can do.
+Next we follow tool visibility and execution authority. The separate <a href={link('/en/extensions/extension-system/')}>Extension topic</a> explains extension integration.
